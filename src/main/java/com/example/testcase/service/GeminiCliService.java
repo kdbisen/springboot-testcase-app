@@ -266,7 +266,7 @@ public class GeminiCliService {
             - Priority: High / Medium / Low (based on business impact)
             - Severity: Critical / High / Medium / Low (based on defect impact)
             - Test Type: Functional / Regression / Smoke / Negative / Boundary
-            - Steps: numbered steps to execute
+            - Steps: numbered steps (use semicolons to separate steps within the cell, e.g. "1. Open app; 2. Enter email; 3. Click Login" - keep each table row on ONE line)
             - Test Data: sample inputs, values, or test data needed (e.g. valid user, invalid password)
             - Cover positive, negative, and edge cases
             - No other text before or after the table""", storyKey, title, desc, acText, extra);

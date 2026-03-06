@@ -21,8 +21,10 @@
         .step-nav button:disabled { opacity: 0.6; cursor: not-allowed; }
         .card { background: #fff; border-radius: 12px; padding: 1.75rem 2rem; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; margin-bottom: 1.5rem; }
         .card h2 { font-size: 1.5rem; font-weight: 700; margin-top: 0 0 1rem 0; }
-        input[type="text"], input[type="search"], textarea { width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; }
+        input[type="text"], input[type="search"], textarea { width: 100%; padding: 0.6rem 0.85rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; transition: border-color 0.15s; }
+        input[type="text"]:focus, input[type="search"]:focus, textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
         textarea { min-height: 80px; resize: vertical; }
+        .form-group textarea { min-height: 60px; }
         .btn { padding: 0.5rem 1rem; border-radius: 8px; font-weight: 500; cursor: pointer; border: none; font-size: 0.95rem; text-decoration: none; display: inline-block; }
         .btn-primary { background: #2563eb; color: white; }
         .btn-primary:hover { background: #1d4ed8; }
@@ -32,14 +34,25 @@
         .btn-danger:hover { background: #b91c1c; }
         .form-group { margin-bottom: 1rem; }
         .form-group label { display: block; margin-bottom: 0.25rem; font-weight: 500; }
-        .story-card { background: #f8fafc; border-radius: 10px; padding: 1rem 1.25rem; border: 1px solid #e2e8f0; margin-bottom: 1rem; }
+        .story-card { background: #f8fafc; border-radius: 10px; padding: 1.25rem 1.5rem; border: 1px solid #e2e8f0; margin-bottom: 1rem; }
+        .story-card pre { font-size: 0.9rem; line-height: 1.5; }
         .story-card summary { cursor: pointer; font-weight: 600; }
         .alert { padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
         .alert-success { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
         .alert-error { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
         .alert-info { background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc; }
-        .tc-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr auto; gap: 1rem; align-items: start; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #e2e8f0; }
+        .tc-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; align-items: start; margin-top: 0.5rem; }
+        .tc-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
         .tc-full { grid-column: 1 / -1; }
+        .tc-id-title { font-weight: 600; font-size: 1rem; color: #0f172a; padding: 0.5rem 0; }
+        .tc-card { background: #f8fafc; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; border: 1px solid #e2e8f0; }
+        .story-section { margin-bottom: 2rem; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border-radius: 12px; overflow: hidden; }
+        .story-section-header { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 0.75rem 1.25rem; border-radius: 10px 10px 0 0; font-weight: 600; font-size: 1.1rem; }
+        .story-section-body { background: #fff; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 10px 10px; padding: 1rem 1.5rem; }
+        .tc-textarea { min-height: 100px; resize: vertical; width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; font-family: inherit; }
+        .tc-card.rejected { opacity: 0.7; background: #fef2f2; }
+        .btn-approve { background: #16a34a !important; color: white !important; }
+        .btn-approve:hover { background: #15803d !important; }
         .export-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
         .radio-group { display: flex; gap: 1rem; margin-bottom: 1rem; }
         .radio-group label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
@@ -137,7 +150,7 @@
         <th:block th:if="${hasStory}">
             <h2>Jira Stories</h2>
             <div th:each="sk : ${storyKeys}" class="story-card">
-                <details open>
+                <details>
                     <summary th:text="${sk + ' — ' + (appSession.storyDetailsBatch.get(sk) != null ? appSession.storyDetailsBatch.get(sk).title : appSession.storyDetails.title)}"></summary>
                     <p><strong>Title:</strong> <span th:text="${appSession.storyDetailsBatch.get(sk) != null ? appSession.storyDetailsBatch.get(sk).title : appSession.storyDetails.title}"></span></p>
                     <p><strong>Description:</strong></p>
@@ -170,79 +183,101 @@
     </div>
 
     <!-- Step 3: Refine & Export -->
-    <div th:if="${appSession.activeStep == 2}" class="card">
+    <div id="step3" th:if="${appSession.activeStep == 2}" class="card">
         <th:block th:unless="${hasTestCases}">
             <div class="alert alert-error">Complete <strong>2. Review & Generate</strong> first.</div>
         </th:block>
         <th:block th:if="${hasTestCases}">
             <h2>Refine & Export</h2>
-            <p style="color:#64748b;">Edit test cases, add custom ones, and export.</p>
+            <p style="color:#64748b;">Edit test cases, add custom ones, and export. Test cases are grouped by story.</p>
 
-            <div th:each="v, iterStat : ${visibleTestCases}" class="tc-block">
-                <div class="tc-row" th:with="tc=${v.testCase}">
-                    <div class="form-group">
-                        <label>Title</label>
-                        <input type="text" th:value="${tc.title}" th:name="'tc_' + ${iterStat.index} + '_title'">
-                    </div>
-                    <div class="form-group">
-                        <label>Priority</label>
-                        <select th:name="'tc_' + ${iterStat.index} + '_priority'">
-                            <option th:value="High" th:selected="${tc.priority == 'High'}">High</option>
-                            <option th:value="Medium" th:selected="${tc.priority == 'Medium'}">Medium</option>
-                            <option th:value="Low" th:selected="${tc.priority == 'Low'}">Low</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Severity</label>
-                        <select th:name="'tc_' + ${iterStat.index} + '_severity'">
-                            <option th:value="Critical" th:selected="${tc.severity == 'Critical'}">Critical</option>
-                            <option th:value="High" th:selected="${tc.severity == 'High'}">High</option>
-                            <option th:value="Medium" th:selected="${tc.severity == 'Medium'}">Medium</option>
-                            <option th:value="Low" th:selected="${tc.severity == 'Low'}">Low</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Test Type</label>
-                        <select th:name="'tc_' + ${iterStat.index} + '_testType'">
-                            <option th:value="Functional" th:selected="${tc.testType == 'Functional'}">Functional</option>
-                            <option th:value="Regression" th:selected="${tc.testType == 'Regression'}">Regression</option>
-                            <option th:value="Smoke" th:selected="${tc.testType == 'Smoke'}">Smoke</option>
-                            <option th:value="Negative" th:selected="${tc.testType == 'Negative'}">Negative</option>
-                            <option th:value="Boundary" th:selected="${tc.testType == 'Boundary'}">Boundary</option>
-                        </select>
-                    </div>
-                    <div th:unless="${v.custom}">
-                        <form method="post" th:action="@{/reject/{index}(index=${v.testCaseIndex})}">
-                            <button type="submit" class="btn btn-danger">Reject</button>
-                        </form>
-                    </div>
-                    <div th:if="${v.custom}"><span class="btn btn-secondary" style="cursor:default;">Custom</span></div>
-                    <div class="form-group tc-full">
-                        <label>Steps</label>
-                        <textarea th:value="${tc.steps}" th:name="'tc_' + ${iterStat.index} + '_steps'" rows="3"></textarea>
-                    </div>
-                    <div class="form-group tc-full">
-                        <label>Expected Result</label>
-                        <input type="text" th:value="${tc.expected}" th:name="'tc_' + ${iterStat.index} + '_expected'">
-                    </div>
-                    <div class="form-group tc-full">
-                        <label>Test Data</label>
-                        <input type="text" th:value="${tc.data}" th:name="'tc_' + ${iterStat.index} + '_data'" placeholder="e.g. valid user, invalid password">
+            <div th:each="storyEntry : ${testCasesByStory}" class="story-section" th:if="${!storyEntry.value.isEmpty()}">
+                <div class="story-section-header" th:with="sd=${appSession.storyDetailsBatch != null ? appSession.storyDetailsBatch.get(storyEntry.key) : null}, storyTitle=${sd != null and sd.title != null ? sd.title : (storyEntry.key != null and !storyEntry.key.isEmpty() ? storyEntry.key : 'Unassigned')}">
+                    <span th:text="${storyEntry.key != null and !storyEntry.key.isEmpty() ? storyEntry.key + ' — ' + storyTitle : storyTitle}">PROJ-123 — Story Title</span>
+                </div>
+                <div class="story-section-body">
+                    <div th:each="v, iterStat : ${storyEntry.value}" class="tc-card" th:classappend="${v.testCase.rejected} ? 'rejected' : ''" th:with="fieldIdx=${v.custom ? v.customIndex + 1000 : v.testCaseIndex}">
+                        <div class="tc-id-title" th:with="tc=${v.testCase}" th:text="${(tc.id != null and !tc.id.isEmpty() ? tc.id : 'TC-' + (iterStat.index + 1)) + ' — ' + (tc.title != null and !tc.title.isEmpty() ? tc.title : 'Test Case')}">TC-01 — Test Case Title</div>
+                        <div class="tc-row" th:with="tc=${v.testCase}">
+                            <div class="form-group">
+                                <label>Priority</label>
+                                <select th:name="'tc_' + ${fieldIdx} + '_priority'">
+                                    <option th:value="High" th:selected="${tc.priority == 'High'}">High</option>
+                                    <option th:value="Medium" th:selected="${tc.priority == 'Medium'}">Medium</option>
+                                    <option th:value="Low" th:selected="${tc.priority == 'Low'}">Low</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Severity</label>
+                                <select th:name="'tc_' + ${fieldIdx} + '_severity'">
+                                    <option th:value="Critical" th:selected="${tc.severity == 'Critical'}">Critical</option>
+                                    <option th:value="High" th:selected="${tc.severity == 'High'}">High</option>
+                                    <option th:value="Medium" th:selected="${tc.severity == 'Medium'}">Medium</option>
+                                    <option th:value="Low" th:selected="${tc.severity == 'Low'}">Low</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Test Type</label>
+                                <select th:name="'tc_' + ${fieldIdx} + '_testType'">
+                                    <option th:value="Functional" th:selected="${tc.testType == 'Functional'}">Functional</option>
+                                    <option th:value="Regression" th:selected="${tc.testType == 'Regression'}">Regression</option>
+                                    <option th:value="Smoke" th:selected="${tc.testType == 'Smoke'}">Smoke</option>
+                                    <option th:value="Negative" th:selected="${tc.testType == 'Negative'}">Negative</option>
+                                    <option th:value="Boundary" th:selected="${tc.testType == 'Boundary'}">Boundary</option>
+                                </select>
+                            </div>
+                            <div class="form-group tc-full">
+                                <label>Expected Result</label>
+                                <textarea class="tc-textarea" th:name="'tc_' + ${fieldIdx} + '_expected'" rows="3" placeholder="Describe the expected outcome..." th:text="${tc.expected}"></textarea>
+                            </div>
+                            <div class="form-group tc-full">
+                                <label>Test Data</label>
+                                <textarea class="tc-textarea" th:name="'tc_' + ${fieldIdx} + '_data'" rows="2" placeholder="e.g. valid user, invalid password, boundary values..." th:text="${tc.data}"></textarea>
+                            </div>
+                            <div class="form-group tc-full">
+                                <label>Steps</label>
+                                <textarea class="tc-textarea" th:name="'tc_' + ${fieldIdx} + '_steps'" rows="4" th:text="${tc.steps}"></textarea>
+                            </div>
+                            <div class="tc-actions tc-full">
+                                <form th:if="${!v.custom}" method="post" th:action="@{/reject/{index}(index=${v.testCaseIndex})}" class="step3-form" style="display:inline;">
+                                    <button type="submit" class="btn btn-danger" th:disabled="${tc.rejected}">Reject</button>
+                                </form>
+                                <form th:if="${v.custom}" method="post" th:action="@{/remove-custom/{index}(index=${v.customIndex})}" class="step3-form" style="display:inline;">
+                                    <button type="submit" class="btn btn-danger">Remove</button>
+                                </form>
+                                <form th:if="${!v.custom}" method="post" th:action="@{/approve/{index}(index=${v.testCaseIndex})}" class="step3-form" style="display:inline;">
+                                    <button type="submit" class="btn btn-approve" th:disabled="${!tc.rejected}">Approve</button>
+                                </form>
+                                <span th:if="${v.custom}" class="btn btn-approve" style="cursor:default; opacity:0.9;">✓ Approved</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <form method="post" th:action="@{/add-custom}" style="margin:1rem 0;">
-                <input type="hidden" name="storyKey" th:value="${appSession.storyKey}">
+            <form method="post" th:action="@{/add-custom}" class="step3-form" style="margin:1rem 0;">
+                <div class="form-group" th:if="${storyKeys != null and #lists.size(storyKeys) > 1}">
+                    <label>Add custom test case to story</label>
+                    <select name="storyKey" style="max-width:400px;">
+                        <option th:each="sk : ${storyKeys}" th:value="${sk}" th:selected="${sk == appSession.storyKey}" th:text="${sk + ' — ' + (appSession.storyDetailsBatch != null and appSession.storyDetailsBatch.get(sk) != null ? appSession.storyDetailsBatch.get(sk).title : '')}"></option>
+                    </select>
+                </div>
+                <input th:if="${storyKeys == null or #lists.size(storyKeys) <= 1}" type="hidden" name="storyKey" th:value="${appSession.storyKey}">
                 <button type="submit" class="btn btn-secondary">+ Add Custom Test Case</button>
             </form>
 
             <h3>Export</h3>
             <div class="export-btns">
-                <a th:href="@{/export/excel}" class="btn btn-primary">📊 Excel</a>
-                <a th:href="@{/export/json}" class="btn btn-primary">JSON</a>
-                <a th:href="@{/export/allure}" class="btn btn-primary">Allure TestOps</a>
-                <form method="post" th:action="@{/create-jira}" class="action-form" data-loading-text="Creating Jira sub-tasks..." style="display:inline;">
+                <form method="post" th:action="@{/update-and-export/excel}" class="step3-form export-form" style="display:inline;">
+                    <button type="submit" class="btn btn-primary">📊 Excel</button>
+                </form>
+                <form method="post" th:action="@{/update-and-export/json}" class="step3-form export-form" style="display:inline;">
+                    <button type="submit" class="btn btn-primary">JSON</button>
+                </form>
+                <form method="post" th:action="@{/update-and-export/allure}" class="step3-form export-form" style="display:inline;">
+                    <button type="submit" class="btn btn-primary">Allure TestOps</button>
+                </form>
+                <form method="post" th:action="@{/create-jira}" class="action-form step3-form" data-loading-text="Creating Jira sub-tasks..." style="display:inline;">
                     <button type="submit" class="btn btn-primary">Export to Jira</button>
                 </form>
             </div>
@@ -273,6 +308,42 @@
             if (btn && btn.disabled) return;
             showLoading(form, form.getAttribute('data-loading-text'));
         });
+    });
+    // Step 3: before any form submit, collect all tc_* fields and add to form; save scroll position
+    function injectTcFieldsAndSaveScroll(form) {
+        var step3 = document.getElementById('step3');
+        if (step3) {
+            sessionStorage.setItem('step3ScrollY', String(window.scrollY || 0));
+            var inputs = document.querySelectorAll('#step3 input[name^="tc_"], #step3 select[name^="tc_"], #step3 textarea[name^="tc_"]');
+            inputs.forEach(function(el) {
+                if (el.form !== form && el.name) {
+                    var hidden = document.createElement('input');
+                    hidden.type = 'hidden';
+                    hidden.name = el.name;
+                    hidden.value = el.value || '';
+                    form.appendChild(hidden);
+                }
+            });
+        }
+    }
+    document.querySelectorAll('#step3 form').forEach(function(form) {
+        form.addEventListener('submit', function() {
+            injectTcFieldsAndSaveScroll(form);
+        });
+    });
+    // Restore scroll position when returning to Step 3 after button click
+    document.addEventListener('DOMContentLoaded', function() {
+        var step3 = document.getElementById('step3');
+        if (step3) {
+            var saved = sessionStorage.getItem('step3ScrollY');
+            if (saved !== null) {
+                sessionStorage.removeItem('step3ScrollY');
+                var y = parseInt(saved, 10);
+                setTimeout(function() { window.scrollTo(0, y); }, 0);
+            } else {
+                setTimeout(function() { step3.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+            }
+        }
     });
 })();
 </script>

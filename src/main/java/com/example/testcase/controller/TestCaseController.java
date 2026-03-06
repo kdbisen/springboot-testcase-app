@@ -59,13 +59,25 @@ public class TestCaseController {
         List<TestCaseView> views = new ArrayList<>();
         int i = 0;
         for (TestCase tc : s.getTestCases()) {
-            if (!tc.isRejected()) views.add(new TestCaseView(tc, i, false));
+            views.add(new TestCaseView(tc, i, false));
             i++;
         }
-        for (TestCase tc : s.getCustomCases()) views.add(new TestCaseView(tc, -1, true));
+        int ci = 0;
+        for (TestCase tc : s.getCustomCases()) {
+            views.add(new TestCaseView(tc, -1, ci++, true));
+        }
         model.addAttribute("visibleTestCases", views);
-        model.addAttribute("storyKeys", s.getStoryKeys().isEmpty() && s.getStoryKey() != null
-            ? List.of(s.getStoryKey()) : s.getStoryKeys());
+        List<String> storyKeys = s.getStoryKeys().isEmpty() && s.getStoryKey() != null
+            ? List.of(s.getStoryKey()) : s.getStoryKeys();
+        model.addAttribute("storyKeys", storyKeys);
+        // Group test cases by story for Step 3 display
+        Map<String, List<TestCaseView>> byStory = new LinkedHashMap<>();
+        for (String sk : storyKeys) byStory.put(sk, new ArrayList<>());
+        for (TestCaseView v : views) {
+            String sk = v.getTestCase().getStoryKey() != null ? v.getTestCase().getStoryKey() : (storyKeys.isEmpty() ? "" : storyKeys.get(0));
+            byStory.computeIfAbsent(sk, k -> new ArrayList<>()).add(v);
+        }
+        model.addAttribute("testCasesByStory", byStory);
         return "index";
     }
 
@@ -186,20 +198,72 @@ public class TestCaseController {
         return "redirect:/";
     }
 
+    /** Apply edits from form params (tc_X_priority, tc_X_expected, etc.) to session test cases. */
+    private void applyUpdatesFromParams(AppSession s, Map<String, String> params) {
+        if (params == null) return;
+        Set<String> indices = new HashSet<>();
+        for (String key : params.keySet()) {
+            if (key.matches("tc_\\d+_.*")) {
+                String idx = key.replaceFirst("tc_(\\d+)_.*", "$1");
+                indices.add(idx);
+            }
+        }
+        for (String idxStr : indices) {
+            int idx;
+            try { idx = Integer.parseInt(idxStr); } catch (NumberFormatException e) { continue; }
+            TestCase tc = idx >= 1000 && (idx - 1000) < s.getCustomCases().size()
+                ? s.getCustomCases().get(idx - 1000) : null;
+            if (tc == null && idx < s.getTestCases().size()) tc = s.getTestCases().get(idx);
+            if (tc == null) continue;
+            String v;
+            if ((v = params.get("tc_" + idx + "_title")) != null) tc.setTitle(v);
+            if ((v = params.get("tc_" + idx + "_priority")) != null) tc.setPriority(v);
+            if ((v = params.get("tc_" + idx + "_severity")) != null) tc.setSeverity(v);
+            if ((v = params.get("tc_" + idx + "_testType")) != null) tc.setTestType(v);
+            if ((v = params.get("tc_" + idx + "_expected")) != null) tc.setExpected(v);
+            if ((v = params.get("tc_" + idx + "_data")) != null) tc.setData(v);
+            if ((v = params.get("tc_" + idx + "_steps")) != null) tc.setSteps(v);
+        }
+    }
+
     // --- Step 3: Reject test case ---
     @PostMapping("/reject/{index}")
-    public String reject(@PathVariable int index, RedirectAttributes ra, HttpSession session) {
+    public String reject(@PathVariable int index, @RequestParam Map<String, String> params, RedirectAttributes ra, HttpSession session) {
         AppSession s = getSession(session);
+        applyUpdatesFromParams(s, params);
         if (index >= 0 && index < s.getTestCases().size()) {
             s.getTestCases().get(index).setRejected(true);
         }
-        return "redirect:/";
+        return "redirect:/#step3";
+    }
+
+    // --- Step 3: Approve test case (un-reject) ---
+    @PostMapping("/approve/{index}")
+    public String approve(@PathVariable int index, @RequestParam Map<String, String> params, RedirectAttributes ra, HttpSession session) {
+        AppSession s = getSession(session);
+        applyUpdatesFromParams(s, params);
+        if (index >= 0 && index < s.getTestCases().size()) {
+            s.getTestCases().get(index).setRejected(false);
+        }
+        return "redirect:/#step3";
+    }
+
+    // --- Step 3: Remove custom test case ---
+    @PostMapping("/remove-custom/{index}")
+    public String removeCustom(@PathVariable int index, @RequestParam Map<String, String> params, HttpSession session) {
+        AppSession s = getSession(session);
+        applyUpdatesFromParams(s, params);
+        if (index >= 0 && index < s.getCustomCases().size()) {
+            s.getCustomCases().remove(index);
+        }
+        return "redirect:/#step3";
     }
 
     // --- Step 3: Add custom test case ---
     @PostMapping("/add-custom")
-    public String addCustom(@RequestParam String storyKey, RedirectAttributes ra, HttpSession session) {
+    public String addCustom(@RequestParam String storyKey, @RequestParam Map<String, String> params, RedirectAttributes ra, HttpSession session) {
         AppSession s = getSession(session);
+        applyUpdatesFromParams(s, params);
         TestCase tc = new TestCase();
         tc.setId("TC-C" + String.format("%02d", s.getCustomCases().size() + 1));
         tc.setTitle("");
@@ -211,21 +275,14 @@ public class TestCaseController {
         tc.setData("");
         tc.setStoryKey(storyKey);
         s.getCustomCases().add(tc);
-        return "redirect:/";
-    }
-
-    // --- Step 3: Update test cases (form submit) ---
-    @PostMapping("/update-cases")
-    public String updateCases(@RequestParam Map<String, String> params, RedirectAttributes ra, HttpSession session) {
-        AppSession s = getSession(session);
-        // Simple update by index - in real app you'd bind to a list
-        return "redirect:/";
+        return "redirect:/#step3";
     }
 
     // --- Step 3: Create in Jira ---
     @PostMapping("/create-jira")
-    public String createJira(RedirectAttributes ra, HttpSession session) {
+    public String createJira(@RequestParam Map<String, String> params, RedirectAttributes ra, HttpSession session) {
         AppSession s = getSession(session);
+        applyUpdatesFromParams(s, params);
         List<TestCase> visible = s.getVisibleTestCases();
         log.info("Create Jira sub-tasks: {} test cases", visible.size());
         if (visible.isEmpty()) {
@@ -248,7 +305,24 @@ public class TestCaseController {
         }
         log.info("Created {} Jira sub-task(s): {}", created.size(), created);
         ra.addFlashAttribute("message", "Created " + created.size() + " sub-task(s): " + String.join(", ", created));
-        return "redirect:/";
+        return "redirect:/#step3";
+    }
+
+    // --- Step 3: Update session from params then redirect to export ---
+    @PostMapping("/update-and-export/excel")
+    public String updateAndExportExcel(@RequestParam Map<String, String> params, HttpSession session) {
+        applyUpdatesFromParams(getSession(session), params);
+        return "redirect:/export/excel";
+    }
+    @PostMapping("/update-and-export/json")
+    public String updateAndExportJson(@RequestParam Map<String, String> params, HttpSession session) {
+        applyUpdatesFromParams(getSession(session), params);
+        return "redirect:/export/json";
+    }
+    @PostMapping("/update-and-export/allure")
+    public String updateAndExportAllure(@RequestParam Map<String, String> params, HttpSession session) {
+        applyUpdatesFromParams(getSession(session), params);
+        return "redirect:/export/allure";
     }
 
     // --- Export Excel ---
