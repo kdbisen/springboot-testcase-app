@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Test Case Generator</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+        .container { max-width: 960px; margin: 0 auto; padding: 2rem 2.5rem; }
+        .hero { text-align: center; margin-bottom: 2rem; }
+        .hero h1 { font-size: 1.85rem; font-weight: 700; margin: 0; }
+        .hero p { color: #64748b; font-size: 0.95rem; margin: 0.4rem 0 0 0; }
+        .hero-badges { display: flex; gap: 0.75rem; justify-content: center; margin-top: 0.75rem; }
+        .hero-badges span { font-size: 0.8rem; padding: 0.3rem 0.65rem; background: #e2e8f0; border-radius: 6px; color: #475569; font-weight: 500; }
+        .step-nav { margin-bottom: 1.5rem; background: #fff; padding: 0.5rem; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; display: flex; gap: 0.5rem; }
+        .step-nav button { flex: 1; padding: 0.6rem 1rem; border-radius: 8px; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: 1px solid #e2e8f0; background: #f1f5f9; color: #475569; }
+        .step-nav button.primary { background: #2563eb; color: white; border-color: #2563eb; }
+        .step-nav button:hover { background: #e2e8f0; }
+        .step-nav button.primary:hover { background: #1d4ed8; }
+        .step-nav button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .card { background: #fff; border-radius: 12px; padding: 1.75rem 2rem; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; margin-bottom: 1.5rem; }
+        .card h2 { font-size: 1.5rem; font-weight: 700; margin-top: 0 0 1rem 0; }
+        input[type="text"], input[type="search"], textarea { width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; }
+        textarea { min-height: 80px; resize: vertical; }
+        .btn { padding: 0.5rem 1rem; border-radius: 8px; font-weight: 500; cursor: pointer; border: none; font-size: 0.95rem; text-decoration: none; display: inline-block; }
+        .btn-primary { background: #2563eb; color: white; }
+        .btn-primary:hover { background: #1d4ed8; }
+        .btn-secondary { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
+        .btn-secondary:hover { background: #e2e8f0; }
+        .btn-danger { background: #dc2626; color: white; }
+        .btn-danger:hover { background: #b91c1c; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.25rem; font-weight: 500; }
+        .story-card { background: #f8fafc; border-radius: 10px; padding: 1rem 1.25rem; border: 1px solid #e2e8f0; margin-bottom: 1rem; }
+        .story-card summary { cursor: pointer; font-weight: 600; }
+        .alert { padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
+        .alert-success { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+        .alert-error { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+        .alert-info { background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc; }
+        .tc-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr auto; gap: 1rem; align-items: start; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #e2e8f0; }
+        .tc-full { grid-column: 1 / -1; }
+        .export-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+        .radio-group { display: flex; gap: 1rem; margin-bottom: 1rem; }
+        .radio-group label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+        .checkbox-group { display: flex; gap: 1rem; margin-bottom: 1rem; }
+        .checkbox-group label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+        select { width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; background: #fff; }
+        .btn:disabled, .btn.disabled { opacity: 0.6; cursor: not-allowed; pointer-events: none; }
+        .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; }
+        .loading-spinner { width: 48px; height: 48px; border: 4px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        .loading-text { margin-top: 1rem; font-weight: 500; color: #475569; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+<div id="loadingOverlay" class="loading-overlay" style="display:none;">
+    <div class="loading-spinner"></div>
+    <div class="loading-text" id="loadingText">Please wait...</div>
+</div>
+<div class="container">
+    <div class="hero">
+        <h1>✨ AI Test Case Generator</h1>
+        <p>Generate comprehensive test cases from Jira stories in seconds</p>
+        <div class="hero-badges">
+            <span>✓ Jira Integration</span>
+            <span>⚡ AI-Powered</span>
+        </div>
+    </div>
+
+    <th:block th:if="${message}">
+        <div class="alert alert-success" th:text="${message}"></div>
+    </th:block>
+    <th:block th:if="${error}">
+        <div class="alert alert-error" th:text="${error}"></div>
+    </th:block>
+
+    <div class="step-nav">
+        <form th:each="label, iterStat : ${stepLabels}" method="post" th:action="@{/step/{step}(step=${iterStat.index})}" style="flex:1;">
+            <button type="submit" th:classappend="${appSession.activeStep == iterStat.index} ? 'primary' : ''" th:text="${label}" style="width:100%;"></button>
+        </form>
+    </div>
+
+    <!-- Step 1: Fetch Story -->
+    <div th:if="${appSession.activeStep == 0}" class="card">
+        <h2>Enter or Search Jira Story</h2>
+        <p style="color:#64748b; margin-bottom:1.5rem;">Type a Jira ID directly, or search to find an issue.</p>
+
+        <!-- Option A: Enter Jira ID directly -->
+        <form method="post" th:action="@{/fetch}" class="action-form" data-loading-text="Fetching story details..." style="margin-bottom:1.5rem;">
+            <div class="form-group">
+                <label for="jiraInput">Enter Jira ID</label>
+                <input id="jiraInput" type="text" name="jiraInput" placeholder="e.g. PROJ-456 or PROJ-456, PROJ-457 (comma-separated for batch)">
+            </div>
+            <input type="hidden" name="batchMode" value="false">
+            <button type="submit" class="btn btn-primary">Fetch Details →</button>
+        </form>
+
+        <hr style="border:none; border-top:1px solid #e2e8f0; margin:1.5rem 0;">
+
+        <!-- Option B: Search Jira -->
+        <form method="post" th:action="@{/search}" class="action-form" data-loading-text="Searching Jira...">
+            <div class="form-group">
+                <label for="searchQuery">Search Jira</label>
+                <div style="display:flex; gap:0.5rem;">
+                    <input id="searchQuery" type="text" name="query" placeholder="e.g. login stories, bugs in PROJ" style="flex:1; min-width:0;">
+                    <button type="submit" class="btn btn-primary">Search</button>
+                </div>
+            </div>
+        </form>
+
+        <!-- Show dropdown only when search results exist -->
+        <div th:if="${appSession.jiraSearchResults != null and !appSession.jiraSearchResults.isEmpty()}" style="margin-top:1rem;">
+            <form method="post" th:action="@{/fetch}" class="action-form" data-loading-text="Fetching story details...">
+                <div class="form-group">
+                    <label>Select from search results</label>
+                    <select name="selectedKey" required>
+                        <option value="">-- Select an issue --</option>
+                        <option th:each="r : ${appSession.jiraSearchResults}" th:value="${r.key}" th:text="${r.key + ' | ' + r.title}"></option>
+                    </select>
+                </div>
+                <input type="hidden" name="batchMode" value="false">
+                <button type="submit" class="btn btn-primary">Fetch Details →</button>
+            </form>
+        </div>
+
+        <div th:if="${appSession.jiraSearchDone and (appSession.jiraSearchResults == null or appSession.jiraSearchResults.isEmpty())}" class="alert alert-info" style="margin-top:1rem;">No issues found. Try a different search or enter a Jira ID above.</div>
+
+        <div th:if="${hasStory}" class="alert alert-success" style="margin-top:1rem;">Story fetched. Go to <strong>2. Review & Generate</strong>.</div>
+    </div>
+
+    <!-- Step 2: Review & Generate -->
+    <div th:if="${appSession.activeStep == 1}" class="card">
+        <th:block th:unless="${hasStory}">
+            <div class="alert alert-error">Complete <strong>1. Fetch Story</strong> first.</div>
+        </th:block>
+        <th:block th:if="${hasStory}">
+            <h2>Jira Stories</h2>
+            <div th:each="sk : ${storyKeys}" class="story-card">
+                <details open>
+                    <summary th:text="${sk + ' — ' + (appSession.storyDetailsBatch.get(sk) != null ? appSession.storyDetailsBatch.get(sk).title : appSession.storyDetails.title)}"></summary>
+                    <p><strong>Title:</strong> <span th:text="${appSession.storyDetailsBatch.get(sk) != null ? appSession.storyDetailsBatch.get(sk).title : appSession.storyDetails.title}"></span></p>
+                    <p><strong>Description:</strong></p>
+                    <pre th:text="${appSession.storyDetailsBatch.get(sk) != null ? appSession.storyDetailsBatch.get(sk).description : appSession.storyDetails.description}" style="white-space:pre-wrap;margin:0;"></pre>
+                    <p th:if="${appSession.storyDetailsBatch.get(sk) != null and !appSession.storyDetailsBatch.get(sk).acceptanceCriteria.isEmpty()}"><strong>Acceptance Criteria:</strong></p>
+                    <ul th:if="${appSession.storyDetailsBatch.get(sk) != null}">
+                        <li th:each="ac : ${appSession.storyDetailsBatch.get(sk).acceptanceCriteria}" th:text="${ac}"></li>
+                    </ul>
+                </details>
+            </div>
+
+            <h2 style="margin-top:1.5rem;">Generate Test Cases</h2>
+            <form method="post" th:action="@{/generate}" class="action-form" data-loading-text="Generating test cases... (~30-60 sec)">
+                <div class="form-group">
+                    <label>Additional instructions (optional)</label>
+                    <textarea name="customInstructions" placeholder="e.g. Focus on API validation, include edge cases..."></textarea>
+                </div>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" name="includeNegative" value="true" checked> Include Negative Tests</label>
+                    <label><input type="checkbox" name="includeBoundary" value="true" checked> Add Boundary Analysis</label>
+                </div>
+                <button type="submit" class="btn btn-primary" th:disabled="${hasTestCases}">✨ Generate AI Test Cases</button>
+            </form>
+
+            <div th:if="${hasTestCases}" class="alert alert-info" style="margin-top:1rem;">Go to <strong>3. Refine & Export</strong> to edit and download.</div>
+            <form method="post" th:action="@{/reset}" style="margin-top:1rem;">
+                <button type="submit" class="btn btn-secondary">Start Over</button>
+            </form>
+        </th:block>
+    </div>
+
+    <!-- Step 3: Refine & Export -->
+    <div th:if="${appSession.activeStep == 2}" class="card">
+        <th:block th:unless="${hasTestCases}">
+            <div class="alert alert-error">Complete <strong>2. Review & Generate</strong> first.</div>
+        </th:block>
+        <th:block th:if="${hasTestCases}">
+            <h2>Refine & Export</h2>
+            <p style="color:#64748b;">Edit test cases, add custom ones, and export.</p>
+
+            <div th:each="v, iterStat : ${visibleTestCases}" class="tc-block">
+                <div class="tc-row" th:with="tc=${v.testCase}">
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" th:value="${tc.title}" th:name="'tc_' + ${iterStat.index} + '_title'">
+                    </div>
+                    <div class="form-group">
+                        <label>Priority</label>
+                        <select th:name="'tc_' + ${iterStat.index} + '_priority'">
+                            <option th:value="High" th:selected="${tc.priority == 'High'}">High</option>
+                            <option th:value="Medium" th:selected="${tc.priority == 'Medium'}">Medium</option>
+                            <option th:value="Low" th:selected="${tc.priority == 'Low'}">Low</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Severity</label>
+                        <select th:name="'tc_' + ${iterStat.index} + '_severity'">
+                            <option th:value="Critical" th:selected="${tc.severity == 'Critical'}">Critical</option>
+                            <option th:value="High" th:selected="${tc.severity == 'High'}">High</option>
+                            <option th:value="Medium" th:selected="${tc.severity == 'Medium'}">Medium</option>
+                            <option th:value="Low" th:selected="${tc.severity == 'Low'}">Low</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Test Type</label>
+                        <select th:name="'tc_' + ${iterStat.index} + '_testType'">
+                            <option th:value="Functional" th:selected="${tc.testType == 'Functional'}">Functional</option>
+                            <option th:value="Regression" th:selected="${tc.testType == 'Regression'}">Regression</option>
+                            <option th:value="Smoke" th:selected="${tc.testType == 'Smoke'}">Smoke</option>
+                            <option th:value="Negative" th:selected="${tc.testType == 'Negative'}">Negative</option>
+                            <option th:value="Boundary" th:selected="${tc.testType == 'Boundary'}">Boundary</option>
+                        </select>
+                    </div>
+                    <div th:unless="${v.custom}">
+                        <form method="post" th:action="@{/reject/{index}(index=${v.testCaseIndex})}">
+                            <button type="submit" class="btn btn-danger">Reject</button>
+                        </form>
+                    </div>
+                    <div th:if="${v.custom}"><span class="btn btn-secondary" style="cursor:default;">Custom</span></div>
+                    <div class="form-group tc-full">
+                        <label>Steps</label>
+                        <textarea th:value="${tc.steps}" th:name="'tc_' + ${iterStat.index} + '_steps'" rows="3"></textarea>
+                    </div>
+                    <div class="form-group tc-full">
+                        <label>Expected Result</label>
+                        <input type="text" th:value="${tc.expected}" th:name="'tc_' + ${iterStat.index} + '_expected'">
+                    </div>
+                    <div class="form-group tc-full">
+                        <label>Test Data</label>
+                        <input type="text" th:value="${tc.data}" th:name="'tc_' + ${iterStat.index} + '_data'" placeholder="e.g. valid user, invalid password">
+                    </div>
+                </div>
+            </div>
+
+            <form method="post" th:action="@{/add-custom}" style="margin:1rem 0;">
+                <input type="hidden" name="storyKey" th:value="${appSession.storyKey}">
+                <button type="submit" class="btn btn-secondary">+ Add Custom Test Case</button>
+            </form>
+
+            <h3>Export</h3>
+            <div class="export-btns">
+                <a th:href="@{/export/excel}" class="btn btn-primary">📊 Excel</a>
+                <a th:href="@{/export/json}" class="btn btn-primary">JSON</a>
+                <a th:href="@{/export/allure}" class="btn btn-primary">Allure TestOps</a>
+                <form method="post" th:action="@{/create-jira}" class="action-form" data-loading-text="Creating Jira sub-tasks..." style="display:inline;">
+                    <button type="submit" class="btn btn-primary">Export to Jira</button>
+                </form>
+            </div>
+
+            <form method="post" th:action="@{/reset}" style="margin-top:1rem;">
+                <button type="submit" class="btn btn-secondary">Start Over</button>
+            </form>
+        </th:block>
+    </div>
+</div>
+<script>
+(function() {
+    function showLoading(form, loadingText) {
+        var overlay = document.getElementById('loadingOverlay');
+        var textEl = document.getElementById('loadingText');
+        if (overlay && textEl) {
+            textEl.textContent = loadingText || 'Please wait...';
+            overlay.style.display = 'flex';
+        }
+        document.querySelectorAll('.step-nav button, .action-form button[type="submit"]').forEach(function(b) {
+            b.disabled = true;
+            b.classList.add('disabled');
+        });
+    }
+    document.querySelectorAll('.action-form').forEach(function(form) {
+        form.addEventListener('submit', function() {
+            var btn = form.querySelector('button[type="submit"]');
+            if (btn && btn.disabled) return;
+            showLoading(form, form.getAttribute('data-loading-text'));
+        });
+    });
+})();
+</script>
+</body>
+</html>
