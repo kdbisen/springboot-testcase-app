@@ -10,6 +10,7 @@ import com.example.testcase.config.StoryDigestUiProperties;
 import com.example.testcase.service.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpSession;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.util.*;
+import java.util.concurrent.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,6 +36,10 @@ public class TestCaseController {
     private final ExportService exportService;
     private final StoryDigestUiProperties storyDigestUi;
     private final ObjectMapper json = new ObjectMapper();
+
+    /** Concurrent MCP/REST fetches when multiple keys (1 = sequential only). */
+    @Value("${story.fetch.parallelism:3}")
+    private int storyFetchParallelism;
 
     public TestCaseController(GeminiCliService geminiService, JiraStoryService jiraStoryService,
                                StoryCacheService cacheService,
@@ -168,19 +174,7 @@ public class TestCaseController {
             return "redirect:/";
         }
         try {
-            Map<String, StoryDetails> batch = new LinkedHashMap<>();
-            for (String key : keysToFetch) {
-                log.debug("Fetching story {}", key);
-                StoryDetails details = cacheService.getCachedStory(key);
-                if (details == null) {
-                    details = jiraStoryService.fetchStoryDetails(key);
-                    cacheService.cacheStory(key, details);
-                    log.info("Fetched story {} (REST API or Gemini per configuration)", key);
-                } else {
-                    log.info("Using cached story {}", key);
-                }
-                batch.put(key, details);
-            }
+            Map<String, StoryDetails> batch = fetchStoriesForKeys(keysToFetch);
             s.setStoryKey(keysToFetch.get(0));
             s.setStoryKeys(keysToFetch);
             s.setStoryDetails(batch.get(keysToFetch.get(0)));
@@ -192,6 +186,78 @@ public class TestCaseController {
             ra.addFlashAttribute("error", GeminiCliService.userFriendlyMessage(e));
         }
         return "redirect:/";
+    }
+
+    /**
+     * Loads stories from cache or fetches; uses a bounded pool when multiple keys need a fresh MCP/REST fetch.
+     */
+    private Map<String, StoryDetails> fetchStoriesForKeys(List<String> keysToFetch) throws Exception {
+        Map<String, StoryDetails> byKey = new HashMap<>();
+        List<String> missing = new ArrayList<>();
+        for (String key : keysToFetch) {
+            StoryDetails cached = cacheService.getCachedStory(key);
+            if (cached != null) {
+                byKey.put(key, cached);
+                log.info("Using cached story {}", key);
+            } else {
+                missing.add(key);
+            }
+        }
+        if (missing.isEmpty()) {
+            return orderBatch(keysToFetch, byKey);
+        }
+        if (missing.size() == 1 || storyFetchParallelism <= 1) {
+            for (String key : missing) {
+                log.debug("Fetching story {}", key);
+                StoryDetails details = jiraStoryService.fetchStoryDetails(key);
+                cacheService.cacheStory(key, details);
+                byKey.put(key, details);
+                log.info("Fetched story {} (REST API or Gemini per configuration)", key);
+            }
+        } else {
+            int poolSize = Math.min(Math.max(1, storyFetchParallelism), missing.size());
+            ExecutorService pool = Executors.newFixedThreadPool(poolSize);
+            try {
+                Map<String, Future<StoryDetails>> futures = new LinkedHashMap<>();
+                for (String key : missing) {
+                    futures.put(key, pool.submit(() -> jiraStoryService.fetchStoryDetails(key)));
+                }
+                for (String key : missing) {
+                    try {
+                        StoryDetails details = futures.get(key).get();
+                        cacheService.cacheStory(key, details);
+                        byKey.put(key, details);
+                        log.info("Fetched story {} (parallel fetch)", key);
+                    } catch (ExecutionException ex) {
+                        Throwable c = ex.getCause() != null ? ex.getCause() : ex;
+                        if (c instanceof Exception) throw (Exception) c;
+                        throw new RuntimeException(c);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(ie);
+                    }
+                }
+            } finally {
+                pool.shutdown();
+                try {
+                    if (!pool.awaitTermination(120, TimeUnit.SECONDS)) {
+                        pool.shutdownNow();
+                    }
+                } catch (InterruptedException ie) {
+                    pool.shutdownNow();
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+        return orderBatch(keysToFetch, byKey);
+    }
+
+    private static Map<String, StoryDetails> orderBatch(List<String> keysOrder, Map<String, StoryDetails> byKey) {
+        Map<String, StoryDetails> batch = new LinkedHashMap<>();
+        for (String key : keysOrder) {
+            batch.put(key, byKey.get(key));
+        }
+        return batch;
     }
 
     // --- Step 2: Generate Test Cases ---

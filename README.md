@@ -79,7 +79,10 @@ Edit `src/main/resources/application.properties`:
 | gemini.cli.log.max-info-chars | 8000 | Truncate long stdout at INFO (full at DEBUG) |
 | gemini.env.extra | (empty) | Extra env vars for Gemini subprocess (format: KEY1=value1;KEY2=value2) |
 | gemini.jira.prompts.path | classpath:jira-prompts.json | Path to Jira prompt templates JSON (use file:./config/jira-prompts.json for external) |
-| story.cache.enabled | false | Offline story cache (set true to enable) |
+| story.cache.enabled | false | Cache fetched story JSON under `.story_cache/` — **set true** to avoid repeat MCP fetches for the same key |
+| story.fetch.parallelism | 3 | Max concurrent fetches when multiple Jira keys are requested (use `1` for sequential) |
+
+**Slow MCP fetch?** See **[docs/mcp-fetch-latency.md](docs/mcp-fetch-latency.md)** (cache, parallelism, CLI/MCP tuning).
 
 ### External Jira Prompts (JSON)
 
@@ -89,14 +92,15 @@ Jira prompt templates can be loaded from an external JSON file. Copy `src/main/r
 gemini.jira.prompts.path=file:./config/jira-prompts.json
 ```
 
-**JSON format:** Each key (`search`, `fetchStory`, `generateTestCases`, `createSubtask`) has a `promptTemplate` with placeholders like `{query}`, `{storyKey}`, `{title}`, `{description}`, `{attachmentsNote}`, etc. Fetch expects a **single JSON object** from Gemini (see `jira-prompts.json` for the rich digest shape).
+**JSON format:** Each key (`search`, `fetchStory`, `generateTestCases`, `createSubtask`) has a `promptTemplate` with placeholders like `{query}`, `{storyKey}`, `{title}`, `{description}`, `{attachmentsNote}`, etc. `fetchStory` asks for a **minimal** issue JSON (title, description, descriptionMarkdown, acceptanceCriteria) to reduce MCP latency; optional fields can be added back in a custom file.
 
 ## Project Structure
 
 ```
 springboot-testcase-app/
 ├── docs/
-│   └── jira-content-patterns-demo.txt   # Example Jira content patterns (illustrative)
+│   ├── jira-content-patterns-demo.txt   # Example Jira content patterns (illustrative)
+│   └── mcp-fetch-latency.md             # Cache, parallelism, ops notes for slow MCP fetch
 ├── pom.xml
 ├── src/main/java/com/example/testcase/
 │   ├── config/JiraPromptsConfig.java   # Loads Jira prompts from JSON

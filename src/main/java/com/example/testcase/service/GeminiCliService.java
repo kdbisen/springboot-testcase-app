@@ -558,7 +558,7 @@ public class GeminiCliService {
         log.info("Fetching story details for {}", storyKey);
         String prompt = jiraPrompts.fill("fetchStory", Map.of("storyKey", storyKey));
         if (prompt.isEmpty()) {
-            prompt = "Get Jira issue " + storyKey + " and output ONLY one JSON object with keys: title, storyType, description, descriptionMarkdown, acceptanceCriteria, keyPointsForTesting, edgeCasesAndRisks, examplesOrScenarios, attachments (filename+optional note; no file content).";
+            prompt = "Fetch Jira issue " + storyKey + " via MCP with minimal tool calls. Output ONLY one JSON object with keys: title, description, descriptionMarkdown, acceptanceCriteria (array of strings; [] if none). No other keys.";
         }
         String[] out = runGeminiWithStats(prompt, GeminiOperation.FETCH);
         StoryDetails details = storyDetailsParser.parse(out[0]);

@@ -74,30 +74,24 @@ public class JiraPromptsConfig {
     private void loadDefaults() {
         promptTemplates.put("search", "Search Jira for issues matching: \"{query}\".\nReturn up to {maxResults} results. Output ONLY in this format, one per line, no other text:\nKEY | Title\nKEY | Title\n...\nExample: PROJ-123 | Implement login feature\nUse actual Jira issue keys and titles from the search results.");
         promptTemplates.put("fetchStory", """
-            Get the full Jira issue {storyKey} using your Jira tools. The issue may be technical or non-technical, small or large; content may use headings, tables, bullet lists, paragraphs, code blocks, or examples—preserve meaning, do not flatten carelessly.
+            When Jira REST API is not configured, fetch issue {storyKey} using your Jira MCP tools only.
 
-            Use Jira tools to list **attachment file names only** (do not download or read file contents). For each attachment include optional `note` inferred from filename or issue context only (e.g. "likely test data" for .csv).
+            Speed: use the minimum number of tool calls (ideally one issue read). Do not list attachments, do not add extra analysis fields.
 
             Output ONLY one JSON object. No markdown fences, no explanation, no text before or after the JSON.
 
-            Required shape:
+            Required keys only (omit any other keys):
             {
-              "title": "<summary/title or N/A>",
-              "storyType": "<short free-text label you infer, e.g. technical feature, bug, spike, UX, or N/A>",
-              "description": "<same as descriptionMarkdown if you only have one body, or shorter summary; use N/A if empty>",
-              "descriptionMarkdown": "<full description as markdown: keep ## headings, tables as pipe tables, lists; N/A if empty>",
-              "acceptanceCriteria": ["..."],
-              "keyPointsForTesting": ["<QA focus bullets, AI-extracted>"],
-              "edgeCasesAndRisks": ["<optional>"],
-              "examplesOrScenarios": ["<optional examples from the issue>"],
-              "attachments": [{"filename": "...", "note": "<optional, filename/context only>"}]
+              "title": "<Jira summary or N/A>",
+              "description": "<short plain summary or N/A>",
+              "descriptionMarkdown": "<full description as markdown: preserve headings, pipe tables, lists; N/A if empty>",
+              "acceptanceCriteria": ["<one string per criterion>"]
             }
 
             Rules:
-            - acceptanceCriteria: one string per criterion; [] if none.
-            - keyPointsForTesting: short bullets; [] if nothing to add beyond AC.
-            - attachments: [] if no attachments; never claim you read file contents.
-            - Use N/A for title/description/descriptionMarkdown only when truly absent.
+            - acceptanceCriteria: one string per row; use [] if none.
+            - Copy description text from Jira; do not invent requirements.
+            - Use N/A only when a field is truly missing.
             """);
         promptTemplates.put("generateTestCases", """
             Based on this Jira story digest, generate comprehensive test cases.
