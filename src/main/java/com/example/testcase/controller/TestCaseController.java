@@ -3,6 +3,7 @@ package com.example.testcase.controller;
 import com.example.testcase.model.AppSession;
 import com.example.testcase.model.JiraSearchResult;
 import com.example.testcase.model.StoryDetails;
+import com.example.testcase.model.SubtaskCreateResult;
 import com.example.testcase.model.TestCase;
 import com.example.testcase.model.TestCaseView;
 import com.example.testcase.service.*;
@@ -49,9 +50,23 @@ public class TestCaseController {
         return s;
     }
 
+    @GetMapping(value = "/health", produces = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseBody
+    public Map<String, Object> health() {
+        return geminiService.checkGeminiAvailability();
+    }
+
     @GetMapping("/")
-    public String index(Model model, HttpSession session) {
+    public String index(@RequestParam(required = false) Boolean recheck, Model model, HttpSession session) {
         AppSession s = getSession(session);
+        if (Boolean.TRUE.equals(recheck)) session.removeAttribute("geminiStatus");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cached = (Map<String, Object>) session.getAttribute("geminiStatus");
+        if (cached == null) {
+            cached = geminiService.checkGeminiAvailability();
+            session.setAttribute("geminiStatus", cached);
+        }
+        model.addAttribute("geminiStatus", cached);
         model.addAttribute("appSession", s);  // Use appSession to avoid conflict with Thymeleaf's built-in "session"
         model.addAttribute("hasStory", s.hasStory());
         model.addAttribute("hasTestCases", s.hasTestCases());
@@ -106,7 +121,7 @@ public class TestCaseController {
             ra.addFlashAttribute("message", "Found " + results.size() + " issues.");
         } catch (Exception e) {
             log.error("Search failed: {}", e.getMessage(), e);
-            ra.addFlashAttribute("error", e.getMessage());
+            ra.addFlashAttribute("error", GeminiCliService.userFriendlyMessage(e));
         }
         return "redirect:/";
     }
@@ -153,7 +168,7 @@ public class TestCaseController {
             ra.addFlashAttribute("message", "Fetched " + keysToFetch.size() + " story/stories.");
         } catch (Exception e) {
             log.error("Fetch failed for keys {}: {}", keysToFetch, e.getMessage(), e);
-            ra.addFlashAttribute("error", e.getMessage());
+            ra.addFlashAttribute("error", GeminiCliService.userFriendlyMessage(e));
         }
         return "redirect:/";
     }
@@ -193,7 +208,7 @@ public class TestCaseController {
             ra.addFlashAttribute("message", "Generated " + allCases.size() + " test cases.");
         } catch (Exception e) {
             log.error("Generate failed: {}", e.getMessage(), e);
-            ra.addFlashAttribute("error", e.getMessage());
+            ra.addFlashAttribute("error", GeminiCliService.userFriendlyMessage(e));
         }
         return "redirect:/";
     }
@@ -295,16 +310,27 @@ public class TestCaseController {
             byStory.computeIfAbsent(sk, k -> new ArrayList<>()).add(tc);
         }
         List<String> created = new ArrayList<>();
+        List<String> failures = new ArrayList<>();
         for (Map.Entry<String, List<TestCase>> e : byStory.entrySet()) {
-            try {
-                String jk = geminiService.createJiraSubtaskForStory(e.getKey(), e.getValue());
-                if (jk != null) created.add(e.getKey() + " → " + jk);
-            } catch (Exception ex) {
-                log.error("Failed to create Jira sub-task for {}: {}", e.getKey(), ex.getMessage(), ex);
+            SubtaskCreateResult r = geminiService.createJiraSubtaskForStory(e.getKey(), e.getValue());
+            if (r.success()) {
+                created.add(e.getKey() + " → " + r.issueKey());
+            } else {
+                failures.add(e.getKey() + ": " + r.errorMessage());
+                log.warn("Jira sub-task not created for {}: {}", e.getKey(), r.errorMessage());
             }
         }
-        log.info("Created {} Jira sub-task(s): {}", created.size(), created);
-        ra.addFlashAttribute("message", "Created " + created.size() + " sub-task(s): " + String.join(", ", created));
+        log.info("Created {} Jira sub-task(s): {}; failures: {}", created.size(), created, failures);
+        if (!created.isEmpty()) {
+            ra.addFlashAttribute("message", "Created " + created.size() + " sub-task(s): " + String.join(", ", created));
+        }
+        if (!failures.isEmpty()) {
+            if (created.isEmpty()) {
+                ra.addFlashAttribute("error", "No Jira sub-tasks were created. " + String.join("; ", failures));
+            } else {
+                ra.addFlashAttribute("warning", "Some sub-tasks failed (" + failures.size() + "): " + String.join("; ", failures));
+            }
+        }
         return "redirect:/#step3";
     }
 

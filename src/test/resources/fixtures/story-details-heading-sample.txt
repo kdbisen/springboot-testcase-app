@@ -1,0 +1,8 @@
+# Order checkout
+
+## Description
+Customer completes purchase using cart.
+
+## Acceptance Criteria
+- Cart total is shown
+- Payment gateway returns success

@@ -4,7 +4,7 @@ Same functionality as the Streamlit app, but runs as a **standard Java web app**
 
 ## Features
 
-- **Jira Integration** — Search, fetch stories, create sub-tasks via Gemini CLI + Atlassian MCP
+- **Jira Integration** — Search, fetch stories, create sub-tasks via Gemini CLI (built-in Jira MCP)
 - **3-Step Workflow** — Fetch Story → Review & Generate → Refine & Export
 - **AI Test Cases** — Generated from Jira stories with Priority, Severity, Test Type
 - **Export** — Excel, JSON, Allure TestOps CSV
@@ -15,8 +15,10 @@ Same functionality as the Streamlit app, but runs as a **standard Java web app**
 
 1. **Java 17+**
 2. **Maven 3.6+**
-3. **Gemini CLI** in PATH — https://github.com/google-gemini/gemini-cli
-4. **Atlassian MCP** — `gemini extensions install https://github.com/atlassian/atlassian-mcp-server`
+3. **Gemini CLI** — https://github.com/google-gemini/gemini-cli  
+   - **Windows (npm):** `npm install -g @google/gemini-cli` (auto-detects `AppData/Roaming/npm/gemini.cmd`)
+   - **macOS/Linux:** Install via package manager; ensure `gemini` is in PATH
+4. **Jira** — Built-in MCP; complete OAuth in Gemini CLI if your Jira instance requires it
 
 ## Build & Run
 
@@ -42,8 +44,19 @@ Edit `src/main/resources/application.properties`:
 |----------|---------|-------------|
 | server.port | 8080 | HTTP port |
 | gemini.cli.timeout | 300 | Timeout in seconds |
-| gemini.approval.mode | yolo | Required for MCP tools |
+| gemini.env.extra | (empty) | Extra env vars for Gemini subprocess (format: KEY1=value1;KEY2=value2) |
+| gemini.jira.prompts.path | classpath:jira-prompts.json | Path to Jira prompt templates JSON (use file:./config/jira-prompts.json for external) |
 | story.cache.enabled | false | Offline story cache (set true to enable) |
+
+### External Jira Prompts (JSON)
+
+Jira prompt templates can be loaded from an external JSON file. Copy `src/main/resources/jira-prompts.json` to `config/jira-prompts.json` and set:
+
+```properties
+gemini.jira.prompts.path=file:./config/jira-prompts.json
+```
+
+**JSON format:** Each key (`search`, `fetchStory`, `generateTestCases`, `createSubtask`) has a `promptTemplate` with placeholders like `{query}`, `{storyKey}`, `{title}`, etc. Parsing expects the same output structure (e.g. `KEY | Title`, `TITLE:`, `DESCRIPTION:`).
 
 ## Project Structure
 
@@ -51,6 +64,7 @@ Edit `src/main/resources/application.properties`:
 springboot-testcase-app/
 ├── pom.xml
 ├── src/main/java/com/example/testcase/
+│   ├── config/JiraPromptsConfig.java   # Loads Jira prompts from JSON
 │   ├── TestCaseApplication.java
 │   ├── controller/TestCaseController.java
 │   ├── service/
@@ -62,6 +76,7 @@ springboot-testcase-app/
 │   └── util/JiraKeyUtil.java
 └── src/main/resources/
     ├── application.properties
+    ├── jira-prompts.json              # Jira prompt templates (can override via gemini.jira.prompts.path)
     └── templates/index.html
 ```
 

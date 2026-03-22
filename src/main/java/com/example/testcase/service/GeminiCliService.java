@@ -1,7 +1,9 @@
 package com.example.testcase.service;
 
+import com.example.testcase.config.JiraPromptsConfig;
 import com.example.testcase.model.JiraSearchResult;
 import com.example.testcase.model.StoryDetails;
+import com.example.testcase.model.SubtaskCreateResult;
 import com.example.testcase.model.TestCase;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,86 +33,436 @@ public class GeminiCliService {
     private static final Pattern JIRA_KEY_PATTERN = Pattern.compile("\\b([A-Z][A-Z0-9]+-\\d+)\\b", Pattern.CASE_INSENSITIVE);
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    @Value("${gemini.cli.timeout:300}")
-    private int timeout;
+    private enum GeminiOperation {
+        SEARCH, FETCH, GENERATE, SUBTASK
+    }
 
-    @Value("${gemini.approval.mode:yolo}")
-    private String approvalMode;
+    @Value("${gemini.cli.timeout:300}")
+    private int defaultTimeout;
+
+    @Value("${gemini.cli.timeout.search:0}")
+    private int timeoutSearch;
+
+    @Value("${gemini.cli.timeout.fetch:0}")
+    private int timeoutFetch;
+
+    @Value("${gemini.cli.timeout.generate:0}")
+    private int timeoutGenerate;
+
+    @Value("${gemini.cli.timeout.subtask:0}")
+    private int timeoutSubtask;
+
+    @Value("${gemini.cli.retry.max-attempts:2}")
+    private int retryMaxAttempts;
+
+    @Value("${gemini.cli.retry.delay-ms:1500}")
+    private long retryDelayMs;
+
+    @Value("${gemini.cli.log.max-info-chars:8000}")
+    private int logMaxInfoChars;
 
     @Value("${gemini.json.output:true}")
     private boolean jsonOutput;
 
-    private String findGeminiCli() {
-        log.debug("Locating Gemini CLI in PATH");
+    /** Extra env vars for Gemini CLI subprocess. Format: KEY1=value1;KEY2=value2 (semicolon-separated). */
+    @Value("${gemini.env.extra:}")
+    private String envExtra;
+
+    private final JiraPromptsConfig jiraPrompts;
+    private final StoryDetailsParser storyDetailsParser;
+
+    public GeminiCliService(JiraPromptsConfig jiraPrompts, StoryDetailsParser storyDetailsParser) {
+        this.jiraPrompts = jiraPrompts;
+        this.storyDetailsParser = storyDetailsParser;
+    }
+
+    /** Map technical errors to short UI messages for flash attributes. */
+    public static String userFriendlyMessage(Throwable t) {
+        if (t == null) return "Unexpected error.";
+        String m = t.getMessage();
+        if (m == null) m = t.toString();
+        String lower = m.toLowerCase(Locale.ROOT);
+        if (t instanceof GeminiCliExecutionException g) {
+            if (g.exitCode == -1) {
+                return "Gemini CLI timed out. Increase the timeout in application.properties (gemini.cli.timeout.*) or try again.";
+            }
+            if (isNonRetryableOutput(g.cliOutput)) {
+                return "MCP or tool execution was denied or blocked. Check Gemini CLI MCP approval and Jira access.";
+            }
+        }
+        if (lower.contains("timed out") || lower.contains("timeout")) {
+            return "Gemini CLI timed out. Increase gemini.cli.timeout (or per-operation timeouts) or try again.";
+        }
+        if (lower.contains("gemini cli not found") || lower.contains("not found in path")) {
+            return "Gemini CLI is not installed or not on PATH. Install from https://github.com/google-gemini/gemini-cli";
+        }
+        if (lower.contains("denied") && (lower.contains("policy") || lower.contains("mcp"))) {
+            return "MCP tool execution was denied. Check Gemini CLI configuration for MCP approval.";
+        }
+        if (lower.contains("approval")) {
+            return "Action requires approval in Gemini CLI. Approve MCP or adjust settings.";
+        }
+        if (m.length() > 500) return m.substring(0, 497) + "...";
+        return m;
+    }
+
+    private static boolean isNonRetryableOutput(String output) {
+        if (output == null || output.isBlank()) return false;
+        String o = output.toLowerCase(Locale.ROOT);
+        if (o.contains("denied") && (o.contains("policy") || o.contains("mcp"))) return true;
+        if (o.contains("tool execution denied")) return true;
+        if (o.contains("unauthorized") || o.contains("authentication failed")) return true;
+        return false;
+    }
+
+    /** Result: [executable, args...] or [single path]. When args exist, run as: executable + args. */
+    private static final class GeminiInvocation {
+        final String executable;
+        final List<String> args;
+
+        GeminiInvocation(String executable, List<String> args) {
+            this.executable = executable;
+            this.args = args != null ? new ArrayList<>(args) : List.of();
+        }
+
+        List<String> toCommand() {
+            List<String> cmd = new ArrayList<>();
+            cmd.add(executable);
+            cmd.addAll(args);
+            return cmd;
+        }
+    }
+
+    /** Unchecked exception carrying CLI exit code and output for retry and user messaging. */
+    public static final class GeminiCliExecutionException extends RuntimeException {
+        private final int exitCode;
+        private final String cliOutput;
+
+        public GeminiCliExecutionException(int exitCode, String cliOutput, String message) {
+            super(message);
+            this.exitCode = exitCode;
+            this.cliOutput = cliOutput != null ? cliOutput : "";
+        }
+
+        public int getExitCode() {
+            return exitCode;
+        }
+
+        public String getCliOutput() {
+            return cliOutput;
+        }
+    }
+
+    private GeminiInvocation findGeminiInvocation() {
+        log.debug("Locating Gemini CLI");
+        boolean isWindows = System.getProperty("os.name", "").toLowerCase().contains("win");
         String pathEnv = System.getenv("PATH");
         if (pathEnv == null) pathEnv = System.getenv("Path");
         if (pathEnv == null) pathEnv = "";
         String[] dirs = pathEnv.split(Pattern.quote(File.pathSeparator));
-        String ext = System.getProperty("os.name", "").toLowerCase().contains("win") ? ".exe" : "";
+
         for (String dir : dirs) {
             if (dir == null || dir.isBlank()) continue;
-            File exe = new File(dir, "gemini" + ext);
+            File exe = new File(dir, isWindows ? "gemini.exe" : "gemini");
             if (exe.exists() && exe.canExecute()) {
-                log.debug("Found Gemini CLI at {}", exe.getAbsolutePath());
-                return exe.getAbsolutePath();
+                log.debug("Found Gemini CLI (native) at {}", exe.getAbsolutePath());
+                return new GeminiInvocation(exe.getAbsolutePath(), null);
             }
         }
+        if (!isWindows) {
+            for (String dir : dirs) {
+                if (dir == null || dir.isBlank()) continue;
+                File exe = new File(dir, "gemini");
+                if (exe.exists() && exe.canRead()) {
+                    log.debug("Found Gemini CLI at {}", exe.getAbsolutePath());
+                    return new GeminiInvocation(exe.getAbsolutePath(), null);
+                }
+            }
+        }
+
+        if (isWindows) {
+            String appdata = System.getenv("APPDATA");
+            String localappdata = System.getenv("LOCALAPPDATA");
+            for (String base : new String[]{appdata, localappdata}) {
+                if (base == null || base.isBlank()) continue;
+                File script = new File(base, "npm" + File.separator + "node_modules" + File.separator + "@google" + File.separator + "gemini-cli" + File.separator + "dist" + File.separator + "index.js");
+                if (script.isFile()) {
+                    String node = findNodeExecutable();
+                    if (node != null) {
+                        log.debug("Found Gemini CLI (node) at {} via node {}", script.getAbsolutePath(), node);
+                        return new GeminiInvocation(node, List.of(script.getAbsolutePath()));
+                    }
+                }
+            }
+        }
+
+        for (String dir : dirs) {
+            if (dir == null || dir.isBlank()) continue;
+            File exe = new File(dir, "gemini.cmd");
+            if (exe.isFile()) {
+                log.debug("Found Gemini CLI (.cmd) at {} (fallback)", exe.getAbsolutePath());
+                return new GeminiInvocation(exe.getAbsolutePath(), null);
+            }
+        }
+        if (isWindows) {
+            String appdata = System.getenv("APPDATA");
+            String localappdata = System.getenv("LOCALAPPDATA");
+            for (String base : new String[]{appdata, localappdata}) {
+                if (base == null || base.isBlank()) continue;
+                File f = new File(base, "npm" + File.separator + "gemini.cmd");
+                if (f.isFile()) {
+                    log.debug("Found Gemini CLI (.cmd) at {} (fallback)", f.getAbsolutePath());
+                    return new GeminiInvocation(f.getAbsolutePath(), null);
+                }
+            }
+        }
+
         log.error("Gemini CLI not found in PATH");
-        throw new IllegalStateException("Gemini CLI not found in PATH. Install: https://github.com/google-gemini/gemini-cli");
+        throw new IllegalStateException("Gemini CLI not found in PATH. Install: https://github.com/google-gemini/gemini-cli. " +
+            "On Windows (npm): npm install -g @google/gemini-cli");
     }
 
-    private String runGemini(String prompt, boolean useJson) throws Exception {
-        String geminiPath = findGeminiCli();
-        log.info("Running Gemini CLI (useJson={}), prompt length={}", useJson, prompt.length());
-        List<String> cmd = new ArrayList<>(Arrays.asList(geminiPath, "--prompt", prompt));
-        if (approvalMode != null && !"none".equalsIgnoreCase(approvalMode)) {
-            cmd.add("--approval-mode");
-            cmd.add(approvalMode);
-        }
+    private List<String> buildGeminiCommand(GeminiInvocation inv, String prompt, boolean useJson) {
+        List<String> cmd = new ArrayList<>(inv.toCommand());
+        cmd.add("--prompt");
+        cmd.add(prompt);
         if (useJson) {
             cmd.add("--output-format");
             cmd.add("json");
         }
+        return cmd;
+    }
 
+    private String findNodeExecutable() {
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv == null) pathEnv = System.getenv("Path");
+        if (pathEnv == null) pathEnv = "";
+        for (String dir : pathEnv.split(Pattern.quote(File.pathSeparator))) {
+            if (dir == null || dir.isBlank()) continue;
+            File node = new File(dir, "node.exe");
+            if (node.exists() && node.canExecute()) return node.getAbsolutePath();
+        }
+        return null;
+    }
+
+    private int timeoutSeconds(GeminiOperation op) {
+        int override = switch (op) {
+            case SEARCH -> timeoutSearch;
+            case FETCH -> timeoutFetch;
+            case GENERATE -> timeoutGenerate;
+            case SUBTASK -> timeoutSubtask;
+        };
+        return override > 0 ? override : defaultTimeout;
+    }
+
+    private String runGeminiOnce(String prompt, boolean useJson, int timeoutSeconds) {
+        GeminiInvocation inv = findGeminiInvocation();
+        List<String> cmd = buildGeminiCommand(inv, prompt, useJson);
         String promptPreview = prompt.length() > 80 ? prompt.substring(0, 80).replace("\n", " ") + "..." : prompt.replace("\n", " ");
-        log.info("Gemini CLI command: {} --prompt \"{}\" {} {}", geminiPath, promptPreview,
-            approvalMode != null && !"none".equalsIgnoreCase(approvalMode) ? "--approval-mode " + approvalMode : "",
+        log.info("Running Gemini CLI (useJson={}), prompt length={}, timeout={}s", useJson, prompt.length(), timeoutSeconds);
+        log.info("Gemini CLI command: {} --prompt \"{}\" {}", inv.executable, promptPreview,
             useJson ? "--output-format json" : "");
         log.debug("Gemini CLI full prompt:\n{}", prompt);
-
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
-        pb.environment().putAll(System.getenv());
-        Process p = pb.start();
+        pb.environment().clear();
+        pb.environment().putAll(getGeminiEnv());
+        Process p;
+        try {
+            p = pb.start();
+        } catch (Exception e) {
+            throw new GeminiCliExecutionException(-2, "", "Failed to start Gemini CLI: " + e.getMessage());
+        }
 
         StringBuilder out = new StringBuilder();
         try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = r.readLine()) != null) out.append(line).append("\n");
+        } catch (Exception e) {
+            p.destroyForcibly();
+            throw new GeminiCliExecutionException(-2, out.toString(), "Error reading Gemini CLI output: " + e.getMessage());
         }
 
-        boolean finished = p.waitFor(timeout, TimeUnit.SECONDS);
+        boolean finished;
+        try {
+            finished = p.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            p.destroyForcibly();
+            throw new GeminiCliExecutionException(-1, out.toString(), "Interrupted waiting for Gemini CLI");
+        }
         if (!finished) {
             p.destroyForcibly();
-            log.error("Gemini CLI timed out after {}s", timeout);
-            throw new RuntimeException("Gemini CLI timed out after " + timeout + "s");
-        }
-        if (p.exitValue() != 0) {
-            log.error("Gemini CLI failed exit={}: {}", p.exitValue(), out);
-            throw new RuntimeException("Gemini CLI failed (exit " + p.exitValue() + "): " + out);
+            log.error("Gemini CLI timed out after {}s", timeoutSeconds);
+            throw new GeminiCliExecutionException(-1, out.toString(), "Gemini CLI timed out after " + timeoutSeconds + "s");
         }
         String output = out.toString();
-        log.info("Gemini CLI output:\n{}", output);
+        logCliOutputSummary(output);
+        int ev = p.exitValue();
+        if (ev != 0) {
+            log.error("Gemini CLI failed exit={}", ev);
+            throw new GeminiCliExecutionException(ev, output, "Gemini CLI failed (exit " + ev + "): " + truncateForMessage(output));
+        }
         return output;
     }
 
-    private String[] runGeminiWithStats(String prompt) throws Exception {
-        if (!jsonOutput) {
-            return new String[]{runGemini(prompt, false), null};
+    private void logCliOutputSummary(String output) {
+        if (log.isDebugEnabled()) {
+            log.debug("Gemini CLI full output:\n{}", output);
+            return;
         }
-        String raw = runGemini(prompt, true);
+        if (output == null) return;
+        if (output.length() <= logMaxInfoChars) {
+            log.info("Gemini CLI output:\n{}", output);
+        } else {
+            log.info("Gemini CLI output (truncated for INFO, {} chars total; full at DEBUG):\n{}...",
+                output.length(), output.substring(0, logMaxInfoChars));
+        }
+    }
+
+    private static String truncateForMessage(String output) {
+        if (output == null) return "";
+        String t = output.trim();
+        return t.length() > 1200 ? t.substring(0, 1197) + "..." : t;
+    }
+
+    private String runGemini(String prompt, boolean useJson, GeminiOperation op) {
+        int max = Math.max(1, retryMaxAttempts);
+        GeminiCliExecutionException last = null;
+        for (int attempt = 1; attempt <= max; attempt++) {
+            try {
+                return runGeminiOnce(prompt, useJson, timeoutSeconds(op));
+            } catch (GeminiCliExecutionException e) {
+                last = e;
+                if (attempt >= max || !shouldRetry(attempt, max, e)) {
+                    throw e;
+                }
+                log.warn("Gemini CLI attempt {}/{} for {} failed: {}; retrying in {}ms",
+                    attempt, max, op, e.getMessage(), retryDelayMs);
+                try {
+                    Thread.sleep(retryDelayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new GeminiCliExecutionException(-2, e.getCliOutput(), "Interrupted during retry wait");
+                }
+            }
+        }
+        throw last != null ? last : new GeminiCliExecutionException(-2, "", "Gemini CLI failed with no attempts");
+    }
+
+    /** Package-visible for unit tests. */
+    static boolean shouldRetryGeminiFailure(int attempt, int maxAttempts, GeminiCliExecutionException e) {
+        return shouldRetry(attempt, maxAttempts, e);
+    }
+
+    private static boolean shouldRetry(int attempt, int maxAttempts, GeminiCliExecutionException e) {
+        if (attempt >= maxAttempts) return false;
+        String out = e.getCliOutput() != null ? e.getCliOutput() : "";
+        if (isNonRetryableOutput(out)) return false;
+        if (e.getExitCode() == -1) return true;
+        String combined = (e.getMessage() != null ? e.getMessage() : "") + "\n" + out;
+        String lower = combined.toLowerCase(Locale.ROOT);
+        if (lower.contains("rate") || lower.contains("429") || lower.contains("temporar")
+            || lower.contains("503") || lower.contains("unavailable")) return true;
+        if (lower.contains("econnreset") || lower.contains("connection reset") || lower.contains("broken pipe")) return true;
+        if (e.getExitCode() > 0 && !isNonRetryableOutput(out)) return true;
+        return false;
+    }
+
+    /** Build env for Gemini CLI subprocess, using existing .gemini config if present. */
+    private Map<String, String> getGeminiEnv() {
+        Map<String, String> env = new HashMap<>(System.getenv());
+        if (envExtra != null && !envExtra.isBlank()) {
+            for (String pair : envExtra.split(";")) {
+                pair = pair.trim();
+                if (pair.contains("=")) {
+                    int idx = pair.indexOf("=");
+                    String key = pair.substring(0, idx).trim();
+                    String value = pair.substring(idx + 1).trim();
+                    if (!key.isEmpty()) {
+                        env.put(key, value);
+                        log.debug("Gemini env: {}={}", key, key.toLowerCase().contains("path") ? "..." : value);
+                    }
+                }
+            }
+        }
+        String existing = env.get("GEMINI_CONFIG_DIR");
+        if (existing != null && !existing.isBlank()) {
+            File f = new File(existing);
+            if (f.isDirectory()) {
+                env.put("GEMINI_CONFIG_DIR", f.getAbsolutePath());
+                return env;
+            }
+        }
+        String home = System.getProperty("user.home");
+        if (home != null) {
+            File homeGemini = new File(home, ".gemini");
+            if (homeGemini.isDirectory()) {
+                env.put("GEMINI_CONFIG_DIR", homeGemini.getAbsolutePath());
+                log.debug("Using Gemini config: {}", homeGemini.getAbsolutePath());
+                return env;
+            }
+        }
+        File cwdGemini = new File(System.getProperty("user.dir", ""), ".gemini");
+        if (cwdGemini.isDirectory()) {
+            env.put("GEMINI_CONFIG_DIR", cwdGemini.getAbsolutePath());
+            log.debug("Using Gemini config: {}", cwdGemini.getAbsolutePath());
+        }
+        return env;
+    }
+
+    /**
+     * Check if Gemini CLI is available and MCP tools can run.
+     * Returns: {ok, gemini_path, message}
+     */
+    public Map<String, Object> checkGeminiAvailability() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", false);
+        result.put("gemini_path", null);
+        result.put("message", "");
         try {
-            // Gemini CLI may output extra text (YOLO mode, OAuth, etc.) before the JSON - extract JSON part
+            GeminiInvocation inv = findGeminiInvocation();
+            result.put("gemini_path", inv.executable);
+            List<String> cmd = buildGeminiCommand(inv, "Reply with exactly: OK", false);
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectErrorStream(true);
+            pb.environment().putAll(getGeminiEnv());
+            Process p = pb.start();
+            StringBuilder out = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) out.append(line).append("\n");
+            }
+            boolean finished = p.waitFor(15, TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroyForcibly();
+                result.put("message", "Gemini CLI timed out. Increase gemini.cli.timeout or check network.");
+                return result;
+            }
+            if (p.exitValue() != 0) {
+                String err = out.toString().trim();
+                if (err.toLowerCase().contains("denied") || err.toLowerCase().contains("policy") || err.toLowerCase().contains("approval")) {
+                    result.put("message", "MCP tool execution denied. Check Gemini CLI config for MCP approval settings.");
+                } else {
+                    result.put("message", "Gemini CLI failed (exit " + p.exitValue() + "): " + (err.length() > 200 ? err.substring(0, 200) : err));
+                }
+                return result;
+            }
+            result.put("ok", true);
+            result.put("message", "Gemini CLI ready (MCP tools available)");
+            return result;
+        } catch (Exception e) {
+            result.put("message", e.getMessage());
+            return result;
+        }
+    }
+
+    private String[] runGeminiWithStats(String prompt, GeminiOperation op) {
+        if (!jsonOutput) {
+            return new String[]{runGemini(prompt, false, op), null};
+        }
+        String raw = runGemini(prompt, true, op);
+        try {
             String jsonStr = extractJsonFromOutput(raw);
             if (jsonStr == null) {
                 log.warn("No JSON found in output, using raw as response");
@@ -125,37 +477,18 @@ public class GeminiCliService {
         }
     }
 
-    /** Extract JSON object from output that may have extra text before/after (e.g. "YOLO mode...", OAuth messages). */
-    private String extractJsonFromOutput(String raw) {
-        int start = raw.indexOf('{');
-        if (start < 0) return null;
-        int depth = 0;
-        int end = -1;
-        for (int i = start; i < raw.length(); i++) {
-            char c = raw.charAt(i);
-            if (c == '{') depth++;
-            else if (c == '}') {
-                depth--;
-                if (depth == 0) {
-                    end = i + 1;
-                    break;
-                }
-            }
-        }
-        return end > start ? raw.substring(start, end) : null;
+    /**
+     * Extract JSON object from CLI output; braces inside JSON strings are respected (same as story JSON parsing).
+     */
+    static String extractJsonFromOutput(String raw) {
+        return StoryDetailsParser.extractJsonObject(raw);
     }
 
-    public List<JiraSearchResult> searchJiraIssues(String query, int maxResults) throws Exception {
+    public List<JiraSearchResult> searchJiraIssues(String query, int maxResults) {
         log.info("Search Jira: query='{}', maxResults={}", query, maxResults);
-        String prompt = String.format("""
-            Search Jira for issues matching: "%s".
-            Return up to %d results. Output ONLY in this format, one per line, no other text:
-            KEY | Title
-            KEY | Title
-            ...
-            Example: PROJ-123 | Implement login feature
-            Use actual Jira issue keys and titles from the search results.""", query, maxResults);
-        String[] out = runGeminiWithStats(prompt);
+        String prompt = jiraPrompts.fill("search", Map.of("query", query, "maxResults", String.valueOf(maxResults)));
+        if (prompt.isEmpty()) prompt = String.format("Search Jira for issues matching: \"%s\". Return up to %d results. Output ONLY in this format, one per line: KEY | Title", query, maxResults);
+        String[] out = runGeminiWithStats(prompt, GeminiOperation.SEARCH);
         List<JiraSearchResult> results = parseSearchResults(out[0]);
         log.info("Search returned {} results", results.size());
         return results;
@@ -176,57 +509,21 @@ public class GeminiCliService {
         return results;
     }
 
-    public StoryDetails fetchStoryDetails(String storyKey) throws Exception {
+    public StoryDetails fetchStoryDetails(String storyKey) {
         log.info("Fetching story details for {}", storyKey);
-        String prompt = String.format("""
-            Get Jira story %s. Output ONLY in this exact format, no other text before or after:
-
-            TITLE: [story title]
-            DESCRIPTION: [full description]
-            ACCEPTANCE_CRITERIA:
-            - [first criterion]
-            - [second criterion]
-            - [etc.]
-
-            Use actual content from the Jira story. If a section is empty, write "N/A".""", storyKey);
-        String[] out = runGeminiWithStats(prompt);
-        StoryDetails details = parseStoryDetails(out[0]);
+        String prompt = jiraPrompts.fill("fetchStory", Map.of("storyKey", storyKey));
+        if (prompt.isEmpty()) {
+            prompt = "Get Jira story " + storyKey + ". Output ONLY valid JSON: {\"title\":\"...\",\"description\":\"...\",\"acceptanceCriteria\":[\"...\"]}";
+        }
+        String[] out = runGeminiWithStats(prompt, GeminiOperation.FETCH);
+        StoryDetails details = storyDetailsParser.parse(out[0]);
         log.info("Fetched story {}: title='{}'", storyKey, details.getTitle());
         return details;
     }
 
-    private StoryDetails parseStoryDetails(String text) {
-        StoryDetails d = new StoryDetails();
-        List<String> descLines = new ArrayList<>();
-        String section = null;
-        for (String line : text.split("\n")) {
-            String s = line.trim();
-            if (s.matches("(?i)^TITLE:\\s*.*")) {
-                d.setTitle(s.replaceFirst("(?i)^TITLE:\\s*", "").trim());
-                section = null;
-            } else if (s.matches("(?i)^DESCRIPTION:\\s*.*")) {
-                section = "desc";
-                descLines.add(s.replaceFirst("(?i)^DESCRIPTION:\\s*", "").trim());
-            } else if (s.matches("(?i)^ACCEPTANCE_CRITERIA.*")) {
-                if (!descLines.isEmpty()) d.setDescription(String.join("\n", descLines));
-                section = "ac";
-                String part = s.replaceFirst("(?i)^ACCEPTANCE_CRITERIA:?\\s*", "").trim();
-                if (part.startsWith("-")) d.getAcceptanceCriteria().add(part.substring(1).trim());
-            } else if ("desc".equals(section)) {
-                descLines.add(s);
-            } else if ("ac".equals(section) && s.startsWith("-")) {
-                d.getAcceptanceCriteria().add(s.substring(1).trim());
-            }
-        }
-        if (!descLines.isEmpty() && "N/A".equals(d.getDescription())) {
-            d.setDescription(String.join("\n", descLines));
-        }
-        return d;
-    }
-
     public String generateTestCases(String storyKey, StoryDetails details,
                                     boolean includeNegative, boolean includeBoundary,
-                                    String customInstructions) throws Exception {
+                                    String customInstructions) {
         String title, desc, acText;
         if (details != null) {
             title = details.getTitle();
@@ -245,32 +542,11 @@ public class GeminiCliService {
         if (customInstructions != null && !customInstructions.isBlank()) {
             extra = (extra + " " + customInstructions.trim()).trim();
         }
-        String prompt = String.format("""
-            Based on this Jira story, generate comprehensive test cases.
-
-            Story: %s
-            Title: %s
-
-            Description:
-            %s
-
-            Acceptance Criteria:
-            %s
-
-            %s
-
-            Output ONLY a markdown table with these exact columns:
-            | ID | Test Case Name | Priority | Severity | Test Type | Steps | Expected Result | Test Data |
-
-            - ID format: TC-01, TC-02, etc.
-            - Priority: High / Medium / Low (based on business impact)
-            - Severity: Critical / High / Medium / Low (based on defect impact)
-            - Test Type: Functional / Regression / Smoke / Negative / Boundary
-            - Steps: numbered steps (use semicolons to separate steps within the cell, e.g. "1. Open app; 2. Enter email; 3. Click Login" - keep each table row on ONE line)
-            - Test Data: sample inputs, values, or test data needed (e.g. valid user, invalid password)
-            - Cover positive, negative, and edge cases
-            - No other text before or after the table""", storyKey, title, desc, acText, extra);
-        String[] out = runGeminiWithStats(prompt);
+        String prompt = jiraPrompts.fill("generateTestCases", Map.of(
+            "storyKey", storyKey, "title", title, "description", desc != null ? desc : "",
+            "acceptanceCriteria", acText, "extra", extra));
+        if (prompt.isEmpty()) prompt = String.format("Based on Jira story %s (Title: %s), generate test cases. Output a markdown table with columns: ID | Test Case Name | Priority | Severity | Test Type | Steps | Expected Result | Test Data", storyKey, title);
+        String[] out = runGeminiWithStats(prompt, GeminiOperation.GENERATE);
         return extractTable(out[0]);
     }
 
@@ -289,8 +565,8 @@ public class GeminiCliService {
         return tableLines.isEmpty() ? text : String.join("\n", tableLines);
     }
 
-    public String createJiraSubtaskForStory(String parentKey, List<TestCase> testCases) {
-        if (testCases == null || testCases.isEmpty()) return null;
+    public SubtaskCreateResult createJiraSubtaskForStory(String parentKey, List<TestCase> testCases) {
+        if (testCases == null || testCases.isEmpty()) return SubtaskCreateResult.fail("No test cases.");
         StringBuilder desc = new StringBuilder();
         for (int i = 0; i < testCases.size(); i++) {
             TestCase tc = testCases.get(i);
@@ -309,22 +585,17 @@ public class GeminiCliService {
             if (i < testCases.size() - 1) desc.append("\n---\n\n");
         }
         String summary = ("Test Cases (" + testCases.size() + " cases)").substring(0, Math.min(255, ("Test Cases (" + testCases.size() + " cases)").length()));
-        String prompt = String.format("""
-            Create a Jira sub-task under parent issue %s.
-
-            Summary: %s
-
-            Description (use markdown, contains all test cases):
-            %s
-
-            Use your Jira MCP tools to create the sub-task. After creating, output ONLY the new issue key (e.g. PROJ-457) on a single line, nothing else.""",
-            parentKey, summary, desc);
+        String prompt = jiraPrompts.fill("createSubtask", Map.of("parentKey", parentKey, "summary", summary, "description", desc.toString()));
+        if (prompt.isEmpty()) prompt = String.format("Create a Jira sub-task under parent issue %s. Summary: %s. Description: %s. Output ONLY the new issue key.", parentKey, summary, desc);
         try {
-            String output = runGemini(prompt, false);
+            String output = runGemini(prompt, false, GeminiOperation.SUBTASK);
             Matcher m = JIRA_KEY_PATTERN.matcher(output);
-            return m.find() ? m.group(1).toUpperCase() : null;
+            if (m.find()) return SubtaskCreateResult.ok(m.group(1).toUpperCase());
+            return SubtaskCreateResult.fail("No Jira issue key found in Gemini response. Check MCP and Jira permissions.");
+        } catch (GeminiCliExecutionException e) {
+            return SubtaskCreateResult.fail(userFriendlyMessage(e));
         } catch (Exception e) {
-            return null;
+            return SubtaskCreateResult.fail(userFriendlyMessage(e));
         }
     }
 }
