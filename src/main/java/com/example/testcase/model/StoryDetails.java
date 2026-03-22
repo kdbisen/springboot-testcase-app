@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Story content from Jira (via Gemini). Extended fields are optional for cache and legacy JSON.
+ * Story content from Jira: prefer REST API when configured; otherwise from Gemini CLI. Extended fields are optional for cache and legacy JSON.
  */
 public class StoryDetails {
     private String title = "N/A";

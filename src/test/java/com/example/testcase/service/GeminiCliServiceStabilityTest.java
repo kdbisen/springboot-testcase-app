@@ -53,4 +53,10 @@ class GeminiCliServiceStabilityTest {
         String msg = GeminiCliService.userFriendlyMessage(e);
         assertTrue(msg.toLowerCase().contains("timed out") || msg.toLowerCase().contains("timeout"));
     }
+
+    @Test
+    void userFriendlyMessage_jiraApiExceptionUnwrapped() {
+        Exception wrapped = new RuntimeException(new JiraApiException("Jira forbidden."));
+        assertEquals("Jira forbidden.", GeminiCliService.userFriendlyMessage(wrapped));
+    }
 }

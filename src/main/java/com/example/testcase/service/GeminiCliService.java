@@ -70,15 +70,25 @@ public class GeminiCliService {
 
     private final JiraPromptsConfig jiraPrompts;
     private final StoryDetailsParser storyDetailsParser;
+    private final JiraRestClient jiraRestClient;
 
-    public GeminiCliService(JiraPromptsConfig jiraPrompts, StoryDetailsParser storyDetailsParser) {
+    public GeminiCliService(JiraPromptsConfig jiraPrompts, StoryDetailsParser storyDetailsParser,
+                            JiraRestClient jiraRestClient) {
         this.jiraPrompts = jiraPrompts;
         this.storyDetailsParser = storyDetailsParser;
+        this.jiraRestClient = jiraRestClient;
     }
 
     /** Map technical errors to short UI messages for flash attributes. */
     public static String userFriendlyMessage(Throwable t) {
         if (t == null) return "Unexpected error.";
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof JiraApiException j) {
+                return j.getMessage();
+            }
+            cur = cur.getCause();
+        }
         String m = t.getMessage();
         if (m == null) m = t.toString();
         String lower = m.toLowerCase(Locale.ROOT);
@@ -420,6 +430,7 @@ public class GeminiCliService {
         result.put("ok", false);
         result.put("gemini_path", null);
         result.put("message", "");
+        result.put("jira_api_configured", jiraRestClient != null && jiraRestClient.isAvailable());
         try {
             GeminiInvocation inv = findGeminiInvocation();
             result.put("gemini_path", inv.executable);
