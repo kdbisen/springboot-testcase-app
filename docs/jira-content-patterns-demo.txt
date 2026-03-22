@@ -1,0 +1,130 @@
+================================================================================
+ DEMO: Jira issue content patterns this app is designed to handle
+================================================================================
+This file is NOT real Jira data. It shows example shapes (headings, tables,
+bullets, paragraphs, attachments) so you can see what Gemini + the app expect.
+
+The real pipeline: Gemini CLI reads your Jira issue via MCP → returns ONE JSON
+"story digest" (title, descriptionMarkdown, acceptanceCriteria, key points,
+attachments metadata, etc.) → Step 2 renders it → Generate builds test cases.
+
+--------------------------------------------------------------------------------
+ PATTERN A — Small, non-technical (short paragraph + bullets)
+--------------------------------------------------------------------------------
+Summary: Update help link on login page
+
+Description:
+  Users complained the "Forgot password" link points to the old portal.
+  We need the new URL and correct analytics tag.
+
+Acceptance criteria:
+  - Link opens https://auth.example.com/reset
+  - 404 never shown for valid locale
+  - Analytics event "help_click" fires once per click
+
+--------------------------------------------------------------------------------
+ PATTERN B — Technical (headings + steps + inline constraints)
+--------------------------------------------------------------------------------
+Summary: [API] POST /orders — idempotency key
+
+## Background
+Checkout service must accept Idempotency-Key header and return same response
+for duplicate requests within 24h.
+
+## Technical notes
+- Store key in Redis TTL 86400
+- Conflict: return 409 with existing order id in body
+
+### Example request
+  POST /v1/orders
+  Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
+
+Acceptance criteria:
+  1. First POST with new key creates order 201
+  2. Retry with same key returns 200 same body
+  3. Different body + same key → 409
+
+--------------------------------------------------------------------------------
+ PATTERN C — Table-heavy (requirements / matrix in Jira)
+--------------------------------------------------------------------------------
+Summary: Role matrix for export feature
+
+| Role        | Can export CSV | Can export PDF | Notes              |
+|-------------|----------------|----------------|--------------------|
+| Viewer      | No             | No             | Read-only          |
+| Editor      | Yes            | No             | CSV max 10k rows |
+| Admin       | Yes            | Yes            | No limit           |
+
+Business rules:
+  - Export buttons hidden if no permission
+  - Audit log entry for every export
+
+--------------------------------------------------------------------------------
+ PATTERN D — "Big" story (many sections — AI preserves structure in markdown)
+--------------------------------------------------------------------------------
+Summary: Onboarding v3 — multi-phase rollout
+
+## Goals
+Reduce drop-off between signup and first successful action.
+
+## Phase 1 (MVP)
+- Email verification only
+- No social login
+
+## Phase 2
+- Google / Apple sign-in
+- See attached mockups (onboarding-v3-mocks.pdf) — open in Jira
+
+## Risks
+- SSO rate limits
+- Email deliverability in EU region
+
+## Out of scope
+- Mobile native apps (web only)
+
+--------------------------------------------------------------------------------
+ PATTERN E — Natural language + examples (no rigid template)
+--------------------------------------------------------------------------------
+Summary: Make search feel faster
+
+Basically when someone types in the shop search box we should show skeleton
+cards immediately and then swap in real results. If the API errors, show a
+friendly message—not a blank page. Example: user types "winter jacket", we show
+3 grey placeholders then fill.
+
+DoD: UX sign-off from design; no regression on mobile width 320px.
+
+--------------------------------------------------------------------------------
+ PATTERN F — Attachments (awareness only — filenames, no file content in app)
+--------------------------------------------------------------------------------
+Summary: Load test data from spreadsheet
+
+Description references a file the QA team uploads to the ticket.
+
+Attachments on issue (illustrative):
+  - test-users.csv          (likely: user/password pairs for staging)
+  - api-contract-v2.json  (likely: request/response samples)
+
+The application lists these names in Step 2 and tells Gemini to mention them
+in generated tests; it does NOT download or read file contents.
+
+--------------------------------------------------------------------------------
+ WHAT THE JSON DIGEST MIGHT LOOK LIKE (illustrative)
+--------------------------------------------------------------------------------
+After fetch, Gemini is asked to emit JSON like:
+
+  title                  → issue summary
+  storyType              → e.g. "technical", "UX", "bug" (free text)
+  descriptionMarkdown    → full body as markdown (tables, headings kept)
+  acceptanceCriteria     → array of strings
+  keyPointsForTesting    → bullets QA should focus on
+  edgeCasesAndRisks      → optional
+  examplesOrScenarios    → optional
+  attachments            → [ { "filename": "...", "note": "..." } ]  (metadata only)
+
+If Gemini returns prose instead of JSON, StoryDetailsParser falls back to
+markdown sections or legacy TITLE:/DESCRIPTION:/AC lines.
+
+================================================================================
+ End of demo file
+================================================================================

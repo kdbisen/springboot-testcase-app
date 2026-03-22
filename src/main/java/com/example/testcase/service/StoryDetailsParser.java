@@ -1,5 +1,6 @@
 package com.example.testcase.service;
 
+import com.example.testcase.model.StoryAttachment;
 import com.example.testcase.model.StoryDetails;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -68,8 +69,10 @@ public class StoryDetailsParser {
         if (d == null) return false;
         boolean hasTitle = d.getTitle() != null && !d.getTitle().isBlank() && !"N/A".equalsIgnoreCase(d.getTitle().trim());
         boolean hasDesc = d.getDescription() != null && !d.getDescription().isBlank() && !"N/A".equalsIgnoreCase(d.getDescription().trim());
+        boolean hasDm = d.getDescriptionMarkdown() != null && !d.getDescriptionMarkdown().isBlank() && !"N/A".equalsIgnoreCase(d.getDescriptionMarkdown().trim());
         boolean hasAc = d.getAcceptanceCriteria() != null && !d.getAcceptanceCriteria().isEmpty();
-        return hasTitle || hasDesc || hasAc;
+        boolean hasKp = d.getKeyPointsForTesting() != null && !d.getKeyPointsForTesting().isEmpty();
+        return hasTitle || hasDesc || hasDm || hasAc || hasKp;
     }
 
     private StoryDetails tryParseJson(String text) {
@@ -81,6 +84,12 @@ public class StoryDetailsParser {
             StoryDetails d = new StoryDetails();
             if (root.hasNonNull("title")) d.setTitle(root.get("title").asText("N/A"));
             if (root.hasNonNull("description")) d.setDescription(root.get("description").asText("N/A"));
+            if (root.hasNonNull("descriptionMarkdown")) {
+                d.setDescriptionMarkdown(root.get("descriptionMarkdown").asText(""));
+            }
+            if (root.hasNonNull("storyType")) {
+                d.setStoryType(root.get("storyType").asText(""));
+            }
             JsonNode ac = root.get("acceptanceCriteria");
             if (ac != null && ac.isArray()) {
                 for (JsonNode n : ac) {
@@ -95,6 +104,11 @@ public class StoryDetailsParser {
                     if (!s.isEmpty()) d.getAcceptanceCriteria().add(s);
                 }
             }
+            addStringArray(root, "keyPointsForTesting", d.getKeyPointsForTesting());
+            addStringArray(root, "edgeCasesAndRisks", d.getEdgeCasesAndRisks());
+            addStringArray(root, "examplesOrScenarios", d.getExamplesOrScenarios());
+            parseAttachments(root.get("attachments"), d);
+            syncDescriptionFromMarkdown(d);
             return d;
         } catch (Exception e) {
             return null;
@@ -384,6 +398,48 @@ public class StoryDetailsParser {
         if (d.getTitle() == null || d.getTitle().isBlank()) d.setTitle("N/A");
         if (d.getDescription() == null || d.getDescription().isBlank()) d.setDescription("N/A");
         if (d.getAcceptanceCriteria() == null) d.setAcceptanceCriteria(new ArrayList<>());
+        if (d.getKeyPointsForTesting() == null) d.setKeyPointsForTesting(new ArrayList<>());
+        if (d.getEdgeCasesAndRisks() == null) d.setEdgeCasesAndRisks(new ArrayList<>());
+        if (d.getExamplesOrScenarios() == null) d.setExamplesOrScenarios(new ArrayList<>());
+        if (d.getAttachments() == null) d.setAttachments(new ArrayList<>());
+        if (d.getStoryType() == null) d.setStoryType("");
+        if (d.getDescriptionMarkdown() == null) d.setDescriptionMarkdown("");
+        syncDescriptionFromMarkdown(d);
         return d;
+    }
+
+    private static void addStringArray(JsonNode root, String key, List<String> target) {
+        JsonNode n = root.get(key);
+        if (n == null || !n.isArray()) return;
+        for (JsonNode item : n) {
+            if (item != null && item.isTextual()) {
+                String s = item.asText().trim();
+                if (!s.isEmpty()) target.add(s);
+            }
+        }
+    }
+
+    private static void parseAttachments(JsonNode node, StoryDetails d) {
+        if (node == null || !node.isArray()) return;
+        for (JsonNode n : node) {
+            if (n == null) continue;
+            if (n.isTextual()) {
+                String fn = n.asText().trim();
+                if (!fn.isEmpty()) d.getAttachments().add(new StoryAttachment(fn, null));
+            } else if (n.isObject()) {
+                String fn = n.hasNonNull("filename") ? n.get("filename").asText("") : "";
+                String note = n.hasNonNull("note") ? n.get("note").asText(null) : null;
+                if (!fn.isBlank()) d.getAttachments().add(new StoryAttachment(fn, note));
+            }
+        }
+    }
+
+    /** If description is still N/A but markdown body exists, align description for legacy consumers. */
+    private static void syncDescriptionFromMarkdown(StoryDetails d) {
+        if (d.getDescriptionMarkdown() == null || d.getDescriptionMarkdown().isBlank()) return;
+        String desc = d.getDescription();
+        if (desc == null || desc.isBlank() || "N/A".equalsIgnoreCase(desc.trim())) {
+            d.setDescription(d.getDescriptionMarkdown());
+        }
     }
 }

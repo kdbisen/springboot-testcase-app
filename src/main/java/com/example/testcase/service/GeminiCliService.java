@@ -513,7 +513,7 @@ public class GeminiCliService {
         log.info("Fetching story details for {}", storyKey);
         String prompt = jiraPrompts.fill("fetchStory", Map.of("storyKey", storyKey));
         if (prompt.isEmpty()) {
-            prompt = "Get Jira story " + storyKey + ". Output ONLY valid JSON: {\"title\":\"...\",\"description\":\"...\",\"acceptanceCriteria\":[\"...\"]}";
+            prompt = "Get Jira issue " + storyKey + " and output ONLY one JSON object with keys: title, storyType, description, descriptionMarkdown, acceptanceCriteria, keyPointsForTesting, edgeCasesAndRisks, examplesOrScenarios, attachments (filename+optional note; no file content).";
         }
         String[] out = runGeminiWithStats(prompt, GeminiOperation.FETCH);
         StoryDetails details = storyDetailsParser.parse(out[0]);
@@ -524,17 +524,17 @@ public class GeminiCliService {
     public String generateTestCases(String storyKey, StoryDetails details,
                                     boolean includeNegative, boolean includeBoundary,
                                     String customInstructions) {
-        String title, desc, acText;
+        StoryDetails d;
         if (details != null) {
-            title = details.getTitle();
-            desc = details.getDescription();
-            acText = details.getAcceptanceCriteria().stream().map(a -> "- " + a).collect(Collectors.joining("\n"));
+            d = details;
         } else {
-            StoryDetails fetched = fetchStoryDetails(storyKey);
-            title = fetched.getTitle();
-            desc = fetched.getDescription();
-            acText = fetched.getAcceptanceCriteria().stream().map(a -> "- " + a).collect(Collectors.joining("\n"));
+            d = fetchStoryDetails(storyKey);
         }
+        String title = d.getTitle();
+        String desc = d.getPrimaryDescription();
+        String acText = d.getAcceptanceCriteria().stream().map(a -> "- " + a).collect(Collectors.joining("\n"));
+        String storyType = d.getStoryType() != null && !d.getStoryType().isBlank() ? d.getStoryType() : "N/A";
+
         List<String> extras = new ArrayList<>();
         if (includeNegative) extras.add("Include negative test cases.");
         if (includeBoundary) extras.add("Include boundary analysis.");
@@ -542,12 +542,35 @@ public class GeminiCliService {
         if (customInstructions != null && !customInstructions.isBlank()) {
             extra = (extra + " " + customInstructions.trim()).trim();
         }
-        String prompt = jiraPrompts.fill("generateTestCases", Map.of(
-            "storyKey", storyKey, "title", title, "description", desc != null ? desc : "",
-            "acceptanceCriteria", acText, "extra", extra));
-        if (prompt.isEmpty()) prompt = String.format("Based on Jira story %s (Title: %s), generate test cases. Output a markdown table with columns: ID | Test Case Name | Priority | Severity | Test Type | Steps | Expected Result | Test Data", storyKey, title);
+
+        Map<String, String> fill = new LinkedHashMap<>();
+        fill.put("storyKey", storyKey);
+        fill.put("storyType", storyType);
+        fill.put("title", title);
+        fill.put("description", desc != null ? desc : "");
+        fill.put("acceptanceCriteria", acText);
+        fill.put("keyPointsForTesting", joinBulletLines(d.getKeyPointsForTesting()));
+        fill.put("edgeCasesAndRisks", joinBulletLines(d.getEdgeCasesAndRisks()));
+        fill.put("examplesOrScenarios", joinBulletLines(d.getExamplesOrScenarios()));
+        fill.put("attachmentsNote", d.formatAttachmentsForPrompt());
+        fill.put("extra", extra);
+
+        String prompt = jiraPrompts.fill("generateTestCases", fill);
+        if (prompt.isEmpty()) {
+            prompt = String.format(
+                "Based on Jira story %s (Title: %s), generate test cases. Output a markdown table with columns: ID | Test Case Name | Priority | Severity | Test Type | Steps | Expected Result | Test Data",
+                storyKey, title);
+        }
         String[] out = runGeminiWithStats(prompt, GeminiOperation.GENERATE);
         return extractTable(out[0]);
+    }
+
+    private static String joinBulletLines(List<String> lines) {
+        if (lines == null || lines.isEmpty()) return "(none)";
+        return lines.stream()
+            .filter(s -> s != null && !s.isBlank())
+            .map(s -> "- " + s.trim())
+            .collect(Collectors.joining("\n"));
     }
 
     private String extractTable(String text) {

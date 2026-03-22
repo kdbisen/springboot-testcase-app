@@ -132,6 +132,20 @@ class StoryDetailsParserTest {
     }
 
     @Test
+    void parse_jsonRichDigest_attachmentsAndKeyPoints() {
+        String raw = "{\"title\":\"Feat\",\"storyType\":\"technical\",\"description\":\"N/A\",\"descriptionMarkdown\":\"# Body\",\"acceptanceCriteria\":[\"AC1\"],\"keyPointsForTesting\":[\"kp1\"],\"edgeCasesAndRisks\":[],\"examplesOrScenarios\":[\"ex1\"],\"attachments\":[{\"filename\":\"a.csv\",\"note\":\"likely data\"}]}";
+        StoryDetails d = parser.parse(raw);
+        assertEquals("Feat", d.getTitle());
+        assertEquals("technical", d.getStoryType());
+        assertEquals("# Body", d.getPrimaryDescription());
+        assertEquals("kp1", d.getKeyPointsForTesting().get(0));
+        assertEquals("ex1", d.getExamplesOrScenarios().get(0));
+        assertEquals(1, d.getAttachments().size());
+        assertEquals("a.csv", d.getAttachments().get(0).getFilename());
+        assertTrue(d.getAttachmentsSummaryLine().contains("a.csv"));
+    }
+
+    @Test
     void parse_fixtureFromClasspath() throws Exception {
         try (var is = getClass().getResourceAsStream("/fixtures/story-details-heading-sample.txt")) {
             assertNotNull(is);

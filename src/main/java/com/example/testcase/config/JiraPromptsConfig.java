@@ -73,8 +73,73 @@ public class JiraPromptsConfig {
 
     private void loadDefaults() {
         promptTemplates.put("search", "Search Jira for issues matching: \"{query}\".\nReturn up to {maxResults} results. Output ONLY in this format, one per line, no other text:\nKEY | Title\nKEY | Title\n...\nExample: PROJ-123 | Implement login feature\nUse actual Jira issue keys and titles from the search results.");
-        promptTemplates.put("fetchStory", "Get the full Jira issue {storyKey} using your Jira tools. Read the Summary, Description, and any Acceptance Criteria (or Definition of Done) fields.\n\nThe issue may store content as plain text, markdown, bullet lists, numbered lists, tables, panels, or headings—extract the real meaning regardless of layout.\n\nOutput ONLY a single JSON object. No markdown fences, no explanation, no text before or after the JSON.\n\nRequired shape:\n{\n  \"title\": \"<issue summary/title, or N/A if missing>\",\n  \"description\": \"<full description as markdown when useful: preserve ## headings and markdown tables converted from Jira tables; use N/A if empty>\",\n  \"acceptanceCriteria\": [\"<one criterion per string>\", \"...\"]\n}\n\nRules:\n- acceptanceCriteria: one array element per distinct criterion. If the source is bullet points, use one string per bullet. If it is a table, use one string per data row (join columns with \" — \" if multiple columns). If there are no criteria, use [].\n- description: include tables as markdown pipe tables when the story used a table; otherwise plain text or markdown is fine.\n- Use the string N/A only for title or description when that field is truly absent.");
-        promptTemplates.put("generateTestCases", "Based on this Jira story, generate comprehensive test cases.\n\nStory: {storyKey}\nTitle: {title}\n\nDescription:\n{description}\n\nAcceptance Criteria:\n{acceptanceCriteria}\n\n{extra}\n\nOutput ONLY a markdown table with these exact columns:\n| ID | Test Case Name | Priority | Severity | Test Type | Steps | Expected Result | Test Data |\n\n- ID format: TC-01, TC-02, etc.\n- Priority: High / Medium / Low (based on business impact)\n- Severity: Critical / High / Medium / Low (based on defect impact)\n- Test Type: Functional / Regression / Smoke / Negative / Boundary\n- Steps: numbered steps (use semicolons to separate steps within the cell, e.g. \"1. Open app; 2. Enter email; 3. Click Login\" - keep each table row on ONE line)\n- Test Data: sample inputs, values, or test data needed (e.g. valid user, invalid password)\n- Cover positive, negative, and edge cases\n- No other text before or after the table");
+        promptTemplates.put("fetchStory", """
+            Get the full Jira issue {storyKey} using your Jira tools. The issue may be technical or non-technical, small or large; content may use headings, tables, bullet lists, paragraphs, code blocks, or examples—preserve meaning, do not flatten carelessly.
+
+            Use Jira tools to list **attachment file names only** (do not download or read file contents). For each attachment include optional `note` inferred from filename or issue context only (e.g. "likely test data" for .csv).
+
+            Output ONLY one JSON object. No markdown fences, no explanation, no text before or after the JSON.
+
+            Required shape:
+            {
+              "title": "<summary/title or N/A>",
+              "storyType": "<short free-text label you infer, e.g. technical feature, bug, spike, UX, or N/A>",
+              "description": "<same as descriptionMarkdown if you only have one body, or shorter summary; use N/A if empty>",
+              "descriptionMarkdown": "<full description as markdown: keep ## headings, tables as pipe tables, lists; N/A if empty>",
+              "acceptanceCriteria": ["..."],
+              "keyPointsForTesting": ["<QA focus bullets, AI-extracted>"],
+              "edgeCasesAndRisks": ["<optional>"],
+              "examplesOrScenarios": ["<optional examples from the issue>"],
+              "attachments": [{"filename": "...", "note": "<optional, filename/context only>"}]
+            }
+
+            Rules:
+            - acceptanceCriteria: one string per criterion; [] if none.
+            - keyPointsForTesting: short bullets; [] if nothing to add beyond AC.
+            - attachments: [] if no attachments; never claim you read file contents.
+            - Use N/A for title/description/descriptionMarkdown only when truly absent.
+            """);
+        promptTemplates.put("generateTestCases", """
+            Based on this Jira story digest, generate comprehensive test cases.
+
+            Story: {storyKey}
+            Story type: {storyType}
+            Title: {title}
+
+            Primary description (markdown):
+            {description}
+
+            Acceptance criteria:
+            {acceptanceCriteria}
+
+            Key points for testing:
+            {keyPointsForTesting}
+
+            Edge cases and risks:
+            {edgeCasesAndRisks}
+
+            Examples / scenarios:
+            {examplesOrScenarios}
+
+            Attachments (metadata only — testers must open files in Jira; contents not available here):
+            {attachmentsNote}
+
+            {extra}
+
+            When attachments are listed, include at least one test case or step that reminds testers to validate against those files in Jira where relevant.
+
+            Output ONLY a markdown table with these exact columns:
+            | ID | Test Case Name | Priority | Severity | Test Type | Steps | Expected Result | Test Data |
+
+            - ID format: TC-01, TC-02, etc.
+            - Priority: High / Medium / Low (based on business impact)
+            - Severity: Critical / High / Medium / Low (based on defect impact)
+            - Test Type: Functional / Regression / Smoke / Negative / Boundary
+            - Steps: numbered steps (use semicolons to separate steps within the cell, e.g. "1. Open app; 2. Enter email; 3. Click Login" - keep each table row on ONE line)
+            - Test Data: sample inputs, values, or test data needed (e.g. valid user, invalid password)
+            - Cover positive, negative, and edge cases
+            - No other text before or after the table
+            """);
         promptTemplates.put("createSubtask", "Create a Jira sub-task under parent issue {parentKey}.\n\nSummary: {summary}\n\nDescription (use markdown, contains all test cases):\n{description}\n\nUse your Jira MCP tools to create the sub-task. After creating, output ONLY the new issue key (e.g. PROJ-457) on a single line, nothing else.");
     }
 
