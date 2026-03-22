@@ -459,29 +459,60 @@ public class GeminiCliService {
 
     private String[] runGeminiWithStats(String prompt, GeminiOperation op) {
         if (!jsonOutput) {
-            return new String[]{runGemini(prompt, false, op), null};
+            String plain = runGemini(prompt, false, op);
+            plain = GeminiCliOutputCleaner.stripAnsiEscapeSequences(plain);
+            plain = GeminiCliOutputCleaner.cleanModelResponse(plain);
+            return new String[]{plain, null};
         }
         String raw = runGemini(prompt, true, op);
         try {
             String jsonStr = extractJsonFromOutput(raw);
             if (jsonStr == null) {
-                log.warn("No JSON found in output, using raw as response");
-                return new String[]{raw, null};
+                log.warn("No JSON wrapper in Gemini output after cleaning (len={}); using noise-stripped text", raw.length());
+                String fallback = fallbackWhenNoWrapperJson(raw);
+                return new String[]{fallback, raw};
             }
             JsonNode data = JSON.readTree(jsonStr);
             String response = data.has("response") ? data.get("response").asText("") : "";
+            response = GeminiCliOutputCleaner.cleanModelResponse(response);
             return new String[]{response, raw};
         } catch (Exception e) {
-            log.warn("JSON parse failed, using raw output: {}", e.getMessage());
-            return new String[]{raw, null};
+            log.warn("JSON parse failed ({}), using noise-stripped text", e.getMessage());
+            return new String[]{fallbackWhenNoWrapperJson(raw), raw};
         }
     }
 
+    /** When --output-format json wrapper is missing, strip ANSI/MCP lines and return rest for table/story parsing. */
+    private static String fallbackWhenNoWrapperJson(String raw) {
+        String s = GeminiCliOutputCleaner.stripAnsiEscapeSequences(raw);
+        s = GeminiCliOutputCleaner.prepareForWrapperJsonParse(s);
+        return GeminiCliOutputCleaner.cleanModelResponse(s);
+    }
+
     /**
-     * Extract JSON object from CLI output; braces inside JSON strings are respected (same as story JSON parsing).
+     * Extract wrapper JSON from CLI stdout: skip leading log lines, optional anchor at "response",
+     * brace-aware (strings) via StoryDetailsParser.extractJsonObject.
      */
     static String extractJsonFromOutput(String raw) {
-        return StoryDetailsParser.extractJsonObject(raw);
+        if (raw == null || raw.isBlank()) return null;
+        String prepared = GeminiCliOutputCleaner.prepareForWrapperJsonParse(raw);
+        String json = StoryDetailsParser.extractJsonObject(prepared);
+        if (json != null) return json;
+        json = StoryDetailsParser.extractJsonObject(GeminiCliOutputCleaner.stripAnsiEscapeSequences(raw));
+        if (json != null) return json;
+        json = extractJsonAnchoredAtResponse(prepared);
+        if (json != null) return json;
+        return extractJsonAnchoredAtResponse(GeminiCliOutputCleaner.stripAnsiEscapeSequences(raw));
+    }
+
+    /** Find {@code {... "response": ...}} when logs prepend garbage and the first {@code { is not the wrapper. */
+    private static String extractJsonAnchoredAtResponse(String text) {
+        if (text == null) return null;
+        int key = text.indexOf("\"response\"");
+        if (key < 0) return null;
+        int brace = text.lastIndexOf('{', key);
+        if (brace < 0) return null;
+        return StoryDetailsParser.extractJsonObject(text.substring(brace));
     }
 
     public List<JiraSearchResult> searchJiraIssues(String query, int maxResults) {
@@ -574,6 +605,15 @@ public class GeminiCliService {
     }
 
     private String extractTable(String text) {
+        String cleaned = GeminiCliOutputCleaner.cleanModelResponse(text);
+        String table = extractTableLines(cleaned);
+        if (!table.isEmpty()) return table;
+        table = extractTableLines(text);
+        if (!table.isEmpty()) return table;
+        return text;
+    }
+
+    private static String extractTableLines(String text) {
         List<String> tableLines = new ArrayList<>();
         boolean inTable = false;
         for (String line : text.split("\n")) {
@@ -585,7 +625,7 @@ public class GeminiCliService {
                 if (!tableLines.isEmpty() && tableLines.get(tableLines.size() - 1).contains("|")) break;
             } else if (inTable && !s.contains("|")) break;
         }
-        return tableLines.isEmpty() ? text : String.join("\n", tableLines);
+        return tableLines.isEmpty() ? "" : String.join("\n", tableLines);
     }
 
     public SubtaskCreateResult createJiraSubtaskForStory(String parentKey, List<TestCase> testCases) {
@@ -612,6 +652,8 @@ public class GeminiCliService {
         if (prompt.isEmpty()) prompt = String.format("Create a Jira sub-task under parent issue %s. Summary: %s. Description: %s. Output ONLY the new issue key.", parentKey, summary, desc);
         try {
             String output = runGemini(prompt, false, GeminiOperation.SUBTASK);
+            output = GeminiCliOutputCleaner.stripAnsiEscapeSequences(output);
+            output = GeminiCliOutputCleaner.cleanModelResponse(output);
             Matcher m = JIRA_KEY_PATTERN.matcher(output);
             if (m.find()) return SubtaskCreateResult.ok(m.group(1).toUpperCase());
             return SubtaskCreateResult.fail("No Jira issue key found in Gemini response. Check MCP and Jira permissions.");
