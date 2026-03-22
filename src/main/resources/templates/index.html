@@ -167,14 +167,16 @@
         </th:block>
         <th:block th:if="${hasStory}">
             <h2>Story digest (review before generating)</h2>
-            <p style="color:#64748b; font-size:0.9rem; margin-bottom:1rem;">Content is interpreted by AI from Jira (any layout). Attachments are listed by name only—open them in Jira when testing.</p>
+            <p style="color:#64748b; font-size:0.9rem; margin-bottom:1rem;">Jira <strong>summary/title</strong>, <strong>description</strong>, and <strong>acceptance criteria</strong> only. Gemini/MCP connection or credential messages are filtered out and never shown here.</p>
+            <p th:if="${digestUi.showDigestIntro}" style="color:#64748b; font-size:0.9rem; margin-bottom:1rem;">Additional detail: content is interpreted from Jira (any layout). Other digest sections can be re-enabled via <code>story.digest.ui.*</code> in application.properties.</p>
+            <div th:if="${storyMissingAcceptanceCriteria}" class="alert alert-warning">No acceptance criteria were detected for this issue. You can still generate tests from the title and description. Add criteria in Jira, or paste them in the optional field below before generating.</div>
             <div th:each="sk : ${storyKeys}" class="story-card">
                 <details open>
                     <summary th:text="${sk + ' — ' + (appSession.storyDetailsBatch.get(sk) != null ? appSession.storyDetailsBatch.get(sk).title : appSession.storyDetails.title)}"></summary>
                     <th:block th:with="sd=${appSession.storyDetailsBatch.get(sk) != null ? appSession.storyDetailsBatch.get(sk) : appSession.storyDetails}">
                         <p><strong>Title:</strong> <span th:text="${sd.title}"></span></p>
-                        <p th:if="${sd.storyType != null and !sd.storyType.isEmpty()}"><strong>Story type:</strong> <span th:text="${sd.storyType}"></span></p>
-                        <div th:if="${sd.keyPointsForTesting != null and !sd.keyPointsForTesting.isEmpty()}" class="digest-section">
+                        <p th:if="${digestUi.showStoryType and sd.storyType != null and !sd.storyType.isEmpty()}"><strong>Story type:</strong> <span th:text="${sd.storyType}"></span></p>
+                        <div th:if="${digestUi.showKeyPointsForTesting and sd.keyPointsForTesting != null and !sd.keyPointsForTesting.isEmpty()}" class="digest-section">
                             <strong>Key points for testing</strong>
                             <ul><li th:each="kp : ${sd.keyPointsForTesting}" th:text="${kp}"></li></ul>
                         </div>
@@ -182,25 +184,29 @@
                             <strong>Description</strong>
                             <div class="markdown-body" th:utext="${@markdownService.toHtml(sd.primaryDescription)}"></div>
                         </div>
-                        <div th:if="${sd.acceptanceCriteria != null and !sd.acceptanceCriteria.isEmpty()}" class="digest-section">
+                        <div th:if="${digestUi.showAcceptanceCriteria and sd.acceptanceCriteria != null and !sd.acceptanceCriteria.isEmpty()}" class="digest-section">
                             <strong>Acceptance criteria</strong>
                             <ul><li th:each="ac : ${sd.acceptanceCriteria}" th:text="${ac}"></li></ul>
                         </div>
-                        <div th:if="${sd.edgeCasesAndRisks != null and !sd.edgeCasesAndRisks.isEmpty()}" class="digest-section">
+                        <div th:if="${digestUi.showEdgeCasesAndRisks and sd.edgeCasesAndRisks != null and !sd.edgeCasesAndRisks.isEmpty()}" class="digest-section">
                             <strong>Edge cases / risks</strong>
                             <ul><li th:each="e : ${sd.edgeCasesAndRisks}" th:text="${e}"></li></ul>
                         </div>
-                        <div th:if="${sd.examplesOrScenarios != null and !sd.examplesOrScenarios.isEmpty()}" class="digest-section">
+                        <div th:if="${digestUi.showExamplesOrScenarios and sd.examplesOrScenarios != null and !sd.examplesOrScenarios.isEmpty()}" class="digest-section">
                             <strong>Examples / scenarios</strong>
                             <ul><li th:each="ex : ${sd.examplesOrScenarios}" th:text="${ex}"></li></ul>
                         </div>
-                        <div th:if="${sd.attachments != null and !sd.attachments.isEmpty()}" class="alert alert-info" style="margin-top:0.75rem; font-size:0.88rem;" th:text="${sd.attachmentsSummaryLine}"></div>
+                        <div th:if="${digestUi.showAttachments and sd.attachments != null and !sd.attachments.isEmpty()}" class="alert alert-info" style="margin-top:0.75rem; font-size:0.88rem;" th:text="${sd.attachmentsSummaryLine}"></div>
                     </th:block>
                 </details>
             </div>
 
             <h2 style="margin-top:1.5rem;">Generate Test Cases</h2>
             <form method="post" th:action="@{/generate}" class="action-form" data-loading-text="Generating test cases... (~30-60 sec)">
+                <div class="form-group" th:if="${storyKeys == null or #lists.size(storyKeys) <= 1}">
+                    <label>Acceptance criteria (optional)</label>
+                    <textarea name="manualAcceptanceCriteria" rows="3" placeholder="If Jira has no AC, paste criteria here (one per line). Ignored when multiple stories are fetched in one batch."></textarea>
+                </div>
                 <div class="form-group">
                     <label>Additional instructions (optional)</label>
                     <textarea name="customInstructions" placeholder="e.g. Focus on API validation, include edge cases..."></textarea>

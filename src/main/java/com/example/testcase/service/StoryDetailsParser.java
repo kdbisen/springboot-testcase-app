@@ -405,6 +405,7 @@ public class StoryDetailsParser {
         if (d.getStoryType() == null) d.setStoryType("");
         if (d.getDescriptionMarkdown() == null) d.setDescriptionMarkdown("");
         syncDescriptionFromMarkdown(d);
+        StoryDetailsContentSanitizer.sanitize(d);
         return d;
     }
 

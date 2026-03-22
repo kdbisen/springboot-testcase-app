@@ -6,6 +6,7 @@ import com.example.testcase.model.StoryDetails;
 import com.example.testcase.model.SubtaskCreateResult;
 import com.example.testcase.model.TestCase;
 import com.example.testcase.model.TestCaseView;
+import com.example.testcase.config.StoryDigestUiProperties;
 import com.example.testcase.service.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpSession;
@@ -27,17 +28,23 @@ public class TestCaseController {
 
     private static final Logger log = LoggerFactory.getLogger(TestCaseController.class);
     private final GeminiCliService geminiService;
+    private final JiraStoryService jiraStoryService;
     private final StoryCacheService cacheService;
     private final TableParserService tableParser;
     private final ExportService exportService;
+    private final StoryDigestUiProperties storyDigestUi;
     private final ObjectMapper json = new ObjectMapper();
 
-    public TestCaseController(GeminiCliService geminiService, StoryCacheService cacheService,
-                               TableParserService tableParser, ExportService exportService) {
+    public TestCaseController(GeminiCliService geminiService, JiraStoryService jiraStoryService,
+                               StoryCacheService cacheService,
+                               TableParserService tableParser, ExportService exportService,
+                               StoryDigestUiProperties storyDigestUi) {
         this.geminiService = geminiService;
+        this.jiraStoryService = jiraStoryService;
         this.cacheService = cacheService;
         this.tableParser = tableParser;
         this.exportService = exportService;
+        this.storyDigestUi = storyDigestUi;
     }
 
     @SuppressWarnings("unchecked")
@@ -93,7 +100,21 @@ public class TestCaseController {
             byStory.computeIfAbsent(sk, k -> new ArrayList<>()).add(v);
         }
         model.addAttribute("testCasesByStory", byStory);
+        model.addAttribute("digestUi", storyDigestUi);
+        model.addAttribute("storyMissingAcceptanceCriteria", computeAnyStoryMissingAcceptanceCriteria(s, storyKeys));
         return "index";
+    }
+
+    private boolean computeAnyStoryMissingAcceptanceCriteria(AppSession s, List<String> storyKeys) {
+        if (!s.hasStory() || storyKeys == null) return false;
+        for (String sk : storyKeys) {
+            StoryDetails sd = s.getStoryDetailsBatch() != null ? s.getStoryDetailsBatch().get(sk) : null;
+            if (sd == null) sd = s.getStoryDetails();
+            if (sd != null && (sd.getAcceptanceCriteria() == null || sd.getAcceptanceCriteria().isEmpty())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<String> getStepLabels(AppSession s) {
@@ -114,7 +135,7 @@ public class TestCaseController {
             return "redirect:/";
         }
         try {
-            List<JiraSearchResult> results = geminiService.searchJiraIssues(query.trim(), 10);
+            List<JiraSearchResult> results = jiraStoryService.searchIssues(query.trim(), 10);
             log.info("Search returned {} issues", results.size());
             s.setJiraSearchResults(results);
             s.setJiraSearchDone(true);
@@ -152,9 +173,9 @@ public class TestCaseController {
                 log.debug("Fetching story {}", key);
                 StoryDetails details = cacheService.getCachedStory(key);
                 if (details == null) {
-                    details = geminiService.fetchStoryDetails(key);
+                    details = jiraStoryService.fetchStoryDetails(key);
                     cacheService.cacheStory(key, details);
-                    log.info("Fetched story {} from Jira (via Gemini CLI)", key);
+                    log.info("Fetched story {} (REST API or Gemini per configuration)", key);
                 } else {
                     log.info("Using cached story {}", key);
                 }
@@ -178,6 +199,7 @@ public class TestCaseController {
     public String generate(@RequestParam(defaultValue = "true") boolean includeNegative,
                            @RequestParam(defaultValue = "true") boolean includeBoundary,
                            @RequestParam(required = false) String customInstructions,
+                           @RequestParam(required = false) String manualAcceptanceCriteria,
                            RedirectAttributes ra, HttpSession session) {
         AppSession s = getSession(session);
         log.info("Generate test cases: includeNegative={}, includeBoundary={}", includeNegative, includeBoundary);
@@ -189,10 +211,21 @@ public class TestCaseController {
         try {
             List<TestCase> allCases = new ArrayList<>();
             int tcOffset = 0;
+            boolean anyStoryHadNoAc = false;
             for (String sk : storyKeys) {
                 StoryDetails det = s.getStoryDetailsBatch().get(sk);
                 if (det == null) det = s.getStoryDetails();
-                String table = geminiService.generateTestCases(sk, det, includeNegative, includeBoundary, customInstructions);
+                StoryDetails forGen = det.copy();
+                if (storyKeys.size() <= 1 && manualAcceptanceCriteria != null && !manualAcceptanceCriteria.isBlank()) {
+                    for (String line : manualAcceptanceCriteria.split("\r?\n")) {
+                        String t = line.trim();
+                        if (!t.isEmpty()) forGen.getAcceptanceCriteria().add(t);
+                    }
+                }
+                if (forGen.getAcceptanceCriteria() == null || forGen.getAcceptanceCriteria().isEmpty()) {
+                    anyStoryHadNoAc = true;
+                }
+                String table = geminiService.generateTestCases(sk, forGen, includeNegative, includeBoundary, customInstructions);
                 List<TestCase> cases = tableParser.parseTable(table, sk);
                 for (TestCase tc : cases) {
                     tc.setStoryKey(sk);
@@ -206,6 +239,11 @@ public class TestCaseController {
             s.setActiveStep(2);
             log.info("Generated {} test cases for stories {}", allCases.size(), storyKeys);
             ra.addFlashAttribute("message", "Generated " + allCases.size() + " test cases.");
+            if (anyStoryHadNoAc) {
+                ra.addFlashAttribute("warning",
+                    "No acceptance criteria were present for at least one story. Tests were generated from the title and description only. "
+                        + "Add acceptance criteria in Jira, or paste them into the optional field on Step 2 before generating.");
+            }
         } catch (Exception e) {
             log.error("Generate failed: {}", e.getMessage(), e);
             ra.addFlashAttribute("error", GeminiCliService.userFriendlyMessage(e));

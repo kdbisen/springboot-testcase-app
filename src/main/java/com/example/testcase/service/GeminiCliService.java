@@ -1,6 +1,7 @@
 package com.example.testcase.service;
 
 import com.example.testcase.config.JiraPromptsConfig;
+import com.example.testcase.config.StoryDigestUiProperties;
 import com.example.testcase.model.JiraSearchResult;
 import com.example.testcase.model.StoryDetails;
 import com.example.testcase.model.SubtaskCreateResult;
@@ -70,15 +71,27 @@ public class GeminiCliService {
 
     private final JiraPromptsConfig jiraPrompts;
     private final StoryDetailsParser storyDetailsParser;
+    private final JiraRestClient jiraRestClient;
+    private final StoryDigestUiProperties storyDigestUi;
 
-    public GeminiCliService(JiraPromptsConfig jiraPrompts, StoryDetailsParser storyDetailsParser) {
+    public GeminiCliService(JiraPromptsConfig jiraPrompts, StoryDetailsParser storyDetailsParser,
+                            JiraRestClient jiraRestClient, StoryDigestUiProperties storyDigestUi) {
         this.jiraPrompts = jiraPrompts;
         this.storyDetailsParser = storyDetailsParser;
+        this.jiraRestClient = jiraRestClient;
+        this.storyDigestUi = storyDigestUi;
     }
 
     /** Map technical errors to short UI messages for flash attributes. */
     public static String userFriendlyMessage(Throwable t) {
         if (t == null) return "Unexpected error.";
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof JiraApiException j) {
+                return j.getMessage();
+            }
+            cur = cur.getCause();
+        }
         String m = t.getMessage();
         if (m == null) m = t.toString();
         String lower = m.toLowerCase(Locale.ROOT);
@@ -420,6 +433,7 @@ public class GeminiCliService {
         result.put("ok", false);
         result.put("gemini_path", null);
         result.put("message", "");
+        result.put("jira_api_configured", jiraRestClient != null && jiraRestClient.isAvailable());
         try {
             GeminiInvocation inv = findGeminiInvocation();
             result.put("gemini_path", inv.executable);
@@ -563,8 +577,13 @@ public class GeminiCliService {
         }
         String title = d.getTitle();
         String desc = d.getPrimaryDescription();
-        String acText = d.getAcceptanceCriteria().stream().map(a -> "- " + a).collect(Collectors.joining("\n"));
-        String storyType = d.getStoryType() != null && !d.getStoryType().isBlank() ? d.getStoryType() : "N/A";
+        StoryDigestUiProperties ui = storyDigestUi;
+
+        String acText = ui.isShowAcceptanceCriteria()
+            ? d.getAcceptanceCriteria().stream().map(a -> "- " + a).collect(Collectors.joining("\n"))
+            : "(none — story.digest.ui.show-acceptance-criteria=false)";
+        String storyType = !ui.isShowStoryType() ? "N/A"
+            : (d.getStoryType() != null && !d.getStoryType().isBlank() ? d.getStoryType() : "N/A");
 
         List<String> extras = new ArrayList<>();
         if (includeNegative) extras.add("Include negative test cases.");
@@ -580,10 +599,18 @@ public class GeminiCliService {
         fill.put("title", title);
         fill.put("description", desc != null ? desc : "");
         fill.put("acceptanceCriteria", acText);
-        fill.put("keyPointsForTesting", joinBulletLines(d.getKeyPointsForTesting()));
-        fill.put("edgeCasesAndRisks", joinBulletLines(d.getEdgeCasesAndRisks()));
-        fill.put("examplesOrScenarios", joinBulletLines(d.getExamplesOrScenarios()));
-        fill.put("attachmentsNote", d.formatAttachmentsForPrompt());
+        fill.put("keyPointsForTesting", ui.isShowKeyPointsForTesting()
+            ? joinBulletLines(d.getKeyPointsForTesting())
+            : "(none — story.digest.ui.show-key-points-for-testing=false)");
+        fill.put("edgeCasesAndRisks", ui.isShowEdgeCasesAndRisks()
+            ? joinBulletLines(d.getEdgeCasesAndRisks())
+            : "(none — story.digest.ui.show-edge-cases-and-risks=false)");
+        fill.put("examplesOrScenarios", ui.isShowExamplesOrScenarios()
+            ? joinBulletLines(d.getExamplesOrScenarios())
+            : "(none — story.digest.ui.show-examples-or-scenarios=false)");
+        fill.put("attachmentsNote", ui.isShowAttachments()
+            ? d.formatAttachmentsForPrompt()
+            : "Attachments not included in this prompt (story.digest.ui.show-attachments=false).");
         fill.put("extra", extra);
 
         String prompt = jiraPrompts.fill("generateTestCases", fill);

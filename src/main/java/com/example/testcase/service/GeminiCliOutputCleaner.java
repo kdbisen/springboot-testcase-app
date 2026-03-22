@@ -14,13 +14,29 @@ public final class GeminiCliOutputCleaner {
     /** Lines that look like tooling/MCP status, not user/model content. */
     private static final Pattern NOISE_LINE = Pattern.compile(
         "(?i)^(.*\\b(?:"
-            + "mcp\\s*(?:server|plugin|client|session|tool|tools|started|starting|connected|ready|listening)"
-            + "|oauth\\s*(?:flow|token|complete|pending)"
+            + "mcp\\s*(?:server|plugin|client|session|tool|tools|started|starting|connected|ready|listening|details?)"
+            + "|oauth\\s*(?:flow|token|complete|pending|credentials?)"
             + "|yolo\\s+mode"
             + "|gemini\\s+cli\\s+(?:plugin|config)"
             + "|server\\s+(?:listening|started)"
             + "|plugin\\s+(?:loaded|started)"
+            + "|cached\\s+credentials?"
+            + "|loaded\\s+cached"
+            + "|credential(s)?\\s+(?:loaded|cached|from\\s+cache)"
             + ")\\b.*)$");
+
+    /** Short lines that are clearly CLI/MCP bootstrap (avoid dropping real Jira paragraphs). */
+    private static final Pattern NOISE_CLI_LEAK = Pattern.compile(
+        "(?i).{0,400}(?:"
+            + "loaded\\s+cached\\s+credentials"
+            + "|cached\\s+credentials"
+            + "|mcp\\s+server\\s+details"
+            + "|mcp\\s+connection\\s+details"
+            + "|connection\\s+details\\s+for\\s+mcp"
+            + "|connecting\\s+to\\s+mcp"
+            + "|oauth\\s+token\\s+refreshed"
+            + "|refreshing\\s+oauth"
+            + ").{0,400}");
 
     private static final Pattern LOG_LEVEL_LINE = Pattern.compile(
         "(?i)^\\s*\\[?(?:INFO|DEBUG|WARN|ERROR|TRACE)\\]?(?:\\s|$).*");
@@ -79,6 +95,13 @@ public final class GeminiCliOutputCleaner {
         String tr = line.trim();
         if (tr.isEmpty()) return false;
         if (LOG_LEVEL_LINE.matcher(tr).matches()) return true;
-        return NOISE_LINE.matcher(tr).matches();
+        if (NOISE_LINE.matcher(tr).matches()) return true;
+        if (tr.length() <= 500 && NOISE_CLI_LEAK.matcher(tr).matches()) return true;
+        return false;
+    }
+
+    /** Public for story field / list item filtering. */
+    public static boolean isNoiseLine(String line) {
+        return shouldDropResponseLine(line);
     }
 }

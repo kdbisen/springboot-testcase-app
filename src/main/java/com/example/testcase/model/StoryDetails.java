@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Story content from Jira (via Gemini). Extended fields are optional for cache and legacy JSON.
+ * Story content from Jira: prefer REST API when configured; otherwise from Gemini CLI. Extended fields are optional for cache and legacy JSON.
  */
 public class StoryDetails {
     private String title = "N/A";
@@ -90,6 +90,25 @@ public class StoryDetails {
 
     public void setAttachments(List<StoryAttachment> attachments) {
         this.attachments = attachments != null ? attachments : new ArrayList<>();
+    }
+
+    /** Deep copy for merging manual acceptance criteria before generation. */
+    public StoryDetails copy() {
+        StoryDetails n = new StoryDetails();
+        n.setTitle(title);
+        n.setDescription(description);
+        n.setDescriptionMarkdown(descriptionMarkdown);
+        n.setStoryType(storyType);
+        n.setAcceptanceCriteria(new ArrayList<>(acceptanceCriteria));
+        n.setKeyPointsForTesting(new ArrayList<>(keyPointsForTesting));
+        n.setEdgeCasesAndRisks(new ArrayList<>(edgeCasesAndRisks));
+        n.setExamplesOrScenarios(new ArrayList<>(examplesOrScenarios));
+        List<StoryAttachment> attCopy = new ArrayList<>();
+        for (StoryAttachment a : attachments) {
+            attCopy.add(new StoryAttachment(a.getFilename(), a.getNote()));
+        }
+        n.setAttachments(attCopy);
+        return n;
     }
 
     /** Body for display and generation: prefer structured markdown field when present. */
